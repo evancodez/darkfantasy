@@ -45,9 +45,11 @@ export function addTrimesh(geometry, matrix = null) {
 
 // A moving/rotating platform: kinematic body + cuboid collider; the caller
 // sets its pose every frame via setPose().
-export function addPlatform(half, mesh) {
+// (round platforms: pass { radius } and half.y as the half-height)
+export function addPlatform(half, mesh, { radius = 0 } = {}) {
   const body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(mesh.position.x, mesh.position.y, mesh.position.z));
-  const col = world.createCollider(RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z).setCollisionGroups(PLATFORM_GROUP), body);
+  const shape = radius ? RAPIER.ColliderDesc.cylinder(half.y, radius) : RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z);
+  const col = world.createCollider(shape.setCollisionGroups(PLATFORM_GROUP), body);
   const p = {
     body, col, mesh, prev: mesh.position.clone(), prevQuat: mesh.quaternion.clone(), delta: new THREE.Vector3(), yawDelta: 0,
     setPose(pos, quat) {

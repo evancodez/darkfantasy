@@ -1,6 +1,6 @@
 // Thin wrapper over audio.js so the game runs (silently) even if the sound
 // module fails to load; requests made before it loads are replayed.
-let impl = null, pendingMusic, inited = false;
+let impl = null, pendingMusic, inited = false, master;
 const loops = new Map();
 const api = {
   init() { inited = true; impl?.init(); },
@@ -10,11 +10,12 @@ const api = {
   stopLoop(n) { loops.delete(n); try { impl?.stopLoop(n); } catch (e) { /* ignore */ } },
   setLoopVolume(n, v) { try { impl?.setLoopVolume?.(n, v); } catch (e) { /* ignore */ } },
   duck(a, s) { try { impl?.duck?.(a, s); } catch (e) { /* ignore */ } },
-  setMasterVolume(v) { try { impl?.setMasterVolume?.(v); } catch (e) { /* ignore */ } },
+  setMasterVolume(v) { master = v; try { impl?.setMasterVolume?.(v); } catch (e) { /* ignore */ } },
 };
 import('./audio.js').then(m => {
   impl = m.default || m;
   if (inited) impl.init();
+  if (master !== undefined) impl.setMasterVolume?.(master);
   if (pendingMusic !== undefined) impl.music(pendingMusic);
   for (const [n, o] of loops) impl.startLoop(n, o);
 }).catch(e => console.warn('audio unavailable', e));

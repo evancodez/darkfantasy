@@ -19,6 +19,8 @@ img { image-rendering: pixelated; }
 .sigils { position: absolute; right: 20px; top: 18px; display: flex; gap: calc(var(--px) * 2); }
 .sigils img { width: calc(var(--px) * 13); height: calc(var(--px) * 13); filter: drop-shadow(var(--px) var(--px) 0 rgba(0,0,0,.6)); }
 .sigils img.got { filter: drop-shadow(0 0 6px #8ab0ff) drop-shadow(var(--px) var(--px) 0 rgba(0,0,0,.6)); }
+.sigils img.tk { width: calc(var(--px) * 14); height: calc(var(--px) * 8); align-self: center; }
+.sigils img.tk.got { filter: drop-shadow(0 0 6px #ffc060) drop-shadow(var(--px) var(--px) 0 rgba(0,0,0,.6)); }
 
 .area { position: absolute; left: 50%; top: 20%; transform: translateX(-50%); text-align: center; opacity: 0; white-space: nowrap; }
 .area.show { animation: area 4.4s steps(24) both; }

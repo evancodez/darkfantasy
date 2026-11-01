@@ -7,7 +7,7 @@ import { createSky } from './world/sky.js';
 import { box } from './core/geo.js';
 
 const q = new URLSearchParams(location.search);
-const R = createRetro({ targetH: +q.get('res') || 300 });
+const R = createRetro({ targetH: +q.get('res') || 450 });
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(50, 1, 0.05, 1000);
 R.resize(camera); addEventListener('resize', () => R.resize(camera));
@@ -23,7 +23,7 @@ const who = q.get('who') || 'hero';
 let actor;
 if (who === 'hero') { const { buildHero } = await import('./actors/hero.js'); actor = buildHero(); }
 else if (who === 'dragon') { const { preview } = await import('./actors/dragon.js'); actor = preview(); }
-else { const mod = await import('./actors/models.js'); actor = mod.build(who); }
+else { if (['imp', 'jack', 'tin'].includes(who)) await import('./actors/fairfolk.js'); const mod = await import('./actors/models.js'); actor = mod.build(who); }
 scene.add(actor.root);
 const act = q.get('act'), at = +q.get('t') || 0;
 const s = { dragon: q.has('dp') ? JSON.parse(q.get('dp')) : {}, speed: +q.get('speed') || 0, grounded: !q.has('air'), vy: +q.get('vy') || 0, action: act, actionT: at, guard: +q.get('guard') || 0, hpFrac: q.has('hp') ? +q.get('hp') : 1 };

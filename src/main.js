@@ -13,10 +13,12 @@ import { Props } from './world/props.js';
 import { HUD } from './ui/hud.js';
 import { buildCastle } from './world/castle.js';
 import { setupDragon } from './actors/dragon.js';
+import { buildCarnival } from './world/carnival/carnival.js';
 import audio from './sound.js';
 
 const params = new URLSearchParams(location.search);
-const R = createRetro({ targetH: +params.get('res') || 300 });
+if (params.has('mute')) audio.setMasterVolume(0);
+const R = createRetro({ targetH: +params.get('res') || 450 });
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(64, 1, 0.1, 1000);
 R.resize(camera);
@@ -102,6 +104,7 @@ game.onPlayerDeath = () => {
 };
 
 game.enterZone = (name, pos, yaw, silent = false) => {
+  if (game.zone !== name) game.zones[game.zone]?.onLeave?.(game);
   for (const [k, z] of Object.entries(game.zones)) z.group.visible = k === name;
   game.zone = name;
   game.zones[name].onEnter?.(game, silent);
@@ -112,16 +115,29 @@ game.enterZone = (name, pos, yaw, silent = false) => {
 populateOutside(game);
 buildCastle(game);
 setupDragon(game);
+hud.loading('Raising the Midnight Carnival…');
+buildCarnival(game);
 for (const [k, z] of Object.entries(game.zones)) z.group.visible = k === 'outside';
 
+// the Star-Eater falls: a moon gate opens in the hoard, onward to the carnival
 game.onVictory = () => {
+  game.cutscene = true;
+  audio.play('victory');
+  setTimeout(() => audio.music('victory'), 2500);
+  game.player.action = 'victory'; game.player.actionT = 0; game.player.cam.focus = null;
+  hud.boss(null);
+  setTimeout(() => hud.callout('The Star-Eater is slain!'), 1200);
+  setTimeout(() => { game.cutscene = false; game.player.action = null; game.openMoonGate(); }, 4600);
+};
+// the Marionette Queen falls: the end
+game.onFinalVictory = () => {
   game.won = true; game.cutscene = true;
   audio.play('victory');
   setTimeout(() => audio.music('victory'), 2500);
   game.player.action = 'victory'; game.player.actionT = 0;
   setTimeout(() => {
     const t = Math.round(game.time - game.startTime), mm = Math.floor(t / 60), ss = String(t % 60).padStart(2, '0');
-    hud.win(`Time ${mm}:${ss}<br>Star-motes ${game.motes}<br>Falls ${game.deaths}`);
+    hud.win(`Time ${mm}:${ss}<br>Star-motes ${game.motes}<br>Falls ${game.deaths}`, 'The Queen\u2019s strings are cut. The carnival sleeps beneath the stars.');
     input.unlock();
   }, 4200);
 };
@@ -163,6 +179,12 @@ game.startAt = (ch) => {
   hud.hint(null); hud.prompt(null);
   if (ch === 'grounds') { if (game.zone !== 'outside') game.enterZone('outside', SPAWN, Math.PI); else game.player.teleport(SPAWN, Math.PI); game.setCheckpoint(SPAWN, Math.PI); return; }
   game.sigils = 3;
+  if (ch === 'carnival' || ch === 'queen') {
+    game.enterFair();
+    if (ch === 'queen') game.zones.carnival.skipTo('queen');
+    R.post.uFade.value = 1;
+    return;
+  }
   if (game.zone !== 'castle') game.enterCastle();
   if (ch !== 'hall') game.zones.castle.skipTo(ch);
   R.post.uFade.value = 1;
@@ -201,6 +223,7 @@ function frame(dt) {
     for (const p of g.projectiles) p.update(sdt);
     g.projectiles = g.projectiles.filter(p => !p.removed);
     g.zones[g.zone].tick?.(sdt, g);
+    g.hoardGateTick?.(sdt);
   }
   g.outside.update(g.time);
 
@@ -209,13 +232,13 @@ function frame(dt) {
   if (g.camHook) g.camHook(camera, dt);
   // atmosphere: fireflies over the grounds, drifting star-dust in the castle
   if (sdt > 0) {
-    const out = g.zone === 'outside';
+    const out = g.zone === 'outside', amb = g.zones[g.zone].ambient;
     for (let i = 0; i < 2; i++) {
       if (Math.random() > 0.75) continue;
       const a = Math.random() * Math.PI * 2, r = 3 + Math.random() * 16;
       const q = new THREE.Vector3(camera.position.x + Math.cos(a) * r, camera.position.y - 1.5 + Math.random() * 5, camera.position.z + Math.sin(a) * r);
-      g.fx.glow.emit({ pos: q, vel: new THREE.Vector3((Math.random() - 0.5) * 0.6, out ? 0.15 : 0.35, (Math.random() - 0.5) * 0.6), life: 2.5 + Math.random() * 2,
-        size: 0.18 + Math.random() * 0.14, size1: 0.02, color: out ? (Math.random() < 0.5 ? 0xb0ff80 : 0xffd070) : (Math.random() < 0.5 ? 0xa080ff : 0x80b0ff), alpha: 0.9, alpha1: 0 });
+      g.fx.glow.emit({ pos: q, vel: new THREE.Vector3((Math.random() - 0.5) * 0.6, amb ? amb[2] : out ? 0.15 : 0.35, (Math.random() - 0.5) * 0.6), life: 2.5 + Math.random() * 2,
+        size: 0.18 + Math.random() * 0.14, size1: 0.02, color: amb ? amb[Math.random() < 0.5 ? 0 : 1] : out ? (Math.random() < 0.5 ? 0xb0ff80 : 0xffd070) : (Math.random() < 0.5 ? 0xa080ff : 0x80b0ff), alpha: 0.9, alpha1: 0 });
     }
   }
 

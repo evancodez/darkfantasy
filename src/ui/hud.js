@@ -48,9 +48,20 @@ function crescent(full) {
   }
   return sprite(rows, full ? {} : { x: '#3a3a6a' });
 }
+const TICKET = [
+  'xxxxxxxxxxxxxx',
+  'xyyyyyyyyyyyyx',
+  '.yYyyyWyyyyYy.',
+  'xyyyyWWryyyyyx',
+  '.yYyyWryyyyYy.',
+  'xyyyyyWWyyyyyx',
+  'xyyyyyyyyyyyyx',
+  'xxxxxxxxxxxxxx',
+];
 const SPR = {
   heart: sprite(HEART), heartE: sprite(HEART, { r: C.e, R: C.E, w: C.e, x: '#4a2a5a' }),
   mote: sprite(MOTE), sigil: crescent(true), sigilE: crescent(false),
+  ticket: sprite(TICKET, { x: '#8a4a08', r: '#c0206a' }), ticketE: sprite(TICKET, { x: '#3a2a4a', y: '#2a1c3a', Y: '#1a1028', W: '#4a3a5a', r: '#3a2a4a' }),
 };
 
 const $ = (id) => document.getElementById(id);
@@ -81,7 +92,7 @@ export class HUD {
       <div class="tag">~ the Candle Knight ~</div>
       <div class="press">PRESS START</div>
       <div class="chapters"><div class="chl">CHAPTERS</div>
-        <button data-ch="grounds">1 · The Grounds</button><button data-ch="hall">2 · The Hall</button><button data-ch="spire">3 · The Spire</button><button data-ch="gate">4 · The Demon Gate</button><button data-ch="dragon">5 · The Dragon</button></div>
+        <button data-ch="grounds">1 · The Grounds</button><button data-ch="hall">2 · The Hall</button><button data-ch="spire">3 · The Spire</button><button data-ch="gate">4 · The Demon Gate</button><button data-ch="dragon">5 · The Dragon</button><button data-ch="carnival">6 · The Moon Carnival</button><button data-ch="queen">7 · The Puppet Queen</button></div>
       <div class="ctl">
         <span><b>WASD</b> move</span><span><b>MOUSE</b> camera</span><span><b>SPACE</b> jump · again to flip</span>
         <span><b>CLICK</b> sword · in air: plunge</span><span><b>RIGHT CLICK / SHIFT</b> shield · tap just before a hit to PARRY</span><span><b>Q / E</b> turn camera</span>
@@ -89,11 +100,12 @@ export class HUD {
     this.titleS.addEventListener('click', (e) => { const ch = e.target.closest('[data-ch]')?.dataset.ch; if (ch) this.onChapter?.(ch); else if (!e.target.closest('.chapters')) this.onStart?.(); });
     this.loadS = el('div', 'screen loading hidden', scr, '<div class="ltxt"></div>');
     this.pauseS = el('div', 'screen pause hidden', scr, `<div class="ptitle">Paused</div><div class="press small">CLICK TO CONTINUE</div><div class="chapters small"><div class="chl">CHAPTERS</div>
-        <button data-ch="grounds">1 · The Grounds</button><button data-ch="hall">2 · The Hall</button><button data-ch="spire">3 · The Spire</button><button data-ch="gate">4 · The Demon Gate</button><button data-ch="dragon">5 · The Dragon</button></div>
+        <button data-ch="grounds">1 · The Grounds</button><button data-ch="hall">2 · The Hall</button><button data-ch="spire">3 · The Spire</button><button data-ch="gate">4 · The Demon Gate</button><button data-ch="dragon">5 · The Dragon</button><button data-ch="carnival">6 · The Moon Carnival</button><button data-ch="queen">7 · The Puppet Queen</button></div>
       <div class="ctl"><span><b>WASD</b> move</span><span><b>SPACE</b> jump / flip</span><span><b>CLICK</b> sword</span><span><b>AIR + CLICK</b> plunge</span><span><b>RIGHT CLICK / SHIFT</b> shield &amp; parry</span><span><b>Q / E</b> camera</span></div>`);
     this.pauseS.addEventListener('click', (e) => { const ch = e.target.closest('[data-ch]')?.dataset.ch; if (ch) this.onChapter?.(ch); else if (!e.target.closest('.chapters')) this.onResume?.(); });
     this.deathS = el('div', 'screen death hidden', scr, '<div class="dtitle">Your Flame Goes Out</div><div class="dsub">…but a candle can be lit again</div>');
     this.winS = el('div', 'screen win hidden', scr, '<div class="logo small">Victory</div><div class="tag">The Star-Eater is slain. Grimhold sleeps.</div><div class="stats"></div><div class="press">THANK YOU FOR PLAYING</div>');
+    this.lastCol = '';
     this.ready = false;
     this.lastHp = -1; this.lastMax = -1; this.lastMotes = -1; this.lastSig = -1;
   }
@@ -102,7 +114,7 @@ export class HUD {
   show(on) { this.root.classList.toggle('hidden', !on); }
   pause(on) { this.pauseS.classList.toggle('hidden', !on); }
   death(on) { this.deathS.classList.toggle('hidden', !on); }
-  win(stats) { this.winS.classList.remove('hidden'); this.winS.querySelector('.stats').innerHTML = stats; this.show(false); }
+  win(stats, tag) { this.winS.classList.remove('hidden'); this.winS.querySelector('.stats').innerHTML = stats; if (tag) this.winS.querySelector('.tag').textContent = tag; this.show(false); }
 
   area(name, sub = '') {
     this.areaBox.innerHTML = `<div class="aname">${name}</div>${sub ? `<div class="asub">${sub}</div>` : ''}`;
@@ -140,9 +152,11 @@ export class HUD {
       if (this.lastMotes >= 0) { this.moteN.parentElement.classList.remove('bump'); void this.moteN.offsetWidth; this.moteN.parentElement.classList.add('bump'); }
       this.lastMotes = g.motes;
     }
-    if (g.sigils !== this.lastSig) {
-      this.sigImgs.forEach((im, i) => { im.src = i < g.sigils ? SPR.sigil : SPR.sigilE; im.classList.toggle('got', i < g.sigils); });
-      this.lastSig = g.sigils;
+    // three Moon Sigils on the grounds, three Moon Tickets at the carnival
+    const fair = g.zone === 'carnival', n = fair ? g.tickets || 0 : g.sigils, key = (fair ? 't' : 's') + n;
+    if (key !== this.lastCol) {
+      this.sigImgs.forEach((im, i) => { im.src = fair ? (i < n ? SPR.ticket : SPR.ticketE) : (i < n ? SPR.sigil : SPR.sigilE); im.classList.toggle('got', i < n); im.classList.toggle('tk', fair); });
+      this.lastCol = key;
     }
   }
 }

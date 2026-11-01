@@ -77,7 +77,7 @@ export class Player {
     this.invuln = 1.3;
     this.action = 'hurt'; this.actionT = 0; this.queued = null; this.guard = 0;
     // traps only nudge you (so a blade doesn't fling you off a ledge); foes knock you back
-    const kb = hit.kind === 'hazard' || hit.kind === 'fire' ? 2.5 : 7.5;
+    const kb = hit.kb ?? (hit.kind === 'hazard' || hit.kind === 'fire' ? 2.5 : 7.5);
     this.vel.copy(toSrc).multiplyScalar(-kb); this.vel.y = hit.kind === 'hazard' || hit.kind === 'fire' ? 4 : 6.5; this.grounded = false;
     audio.play('hurt');
     this.game.hurtFlash();
@@ -102,6 +102,8 @@ export class Player {
   update(dt) {
     const g = this.game, t = TUNE;
     const ctrl = !this.dead && !g.cutscene;
+    // held in place by something (the circus cannon): just follow along
+    if (this.frozen) { this.vel.set(0, 0, 0); this.root.visible = false; this.root.position.copy(this.pos); return; }
     this.invuln = Math.max(0, this.invuln - dt);
     this.parryFlash = Math.max(0, (this.parryFlash || 0) - dt);
     if (this.action) this.actionT += dt;
@@ -161,15 +163,21 @@ export class Player {
     let acc = this.grounded ? (maxS > 0.1 ? t.accel : t.decel) : (mag > 0.1 ? t.airAccel : 9);
     if (this.action === 'hurt') acc = 4;
     if (attacking && this.grounded) acc = 22;
-    if (this.action === 'plunge') acc = 0;
+    if (this.action === 'plunge' || this.ballistic) acc = 0;
     const dx = tx - this.vel.x, dz = tz - this.vel.z, dl = Math.hypot(dx, dz);
     if (dl > 0) { const s = Math.min(dl, acc * dt) / dl; this.vel.x += dx * s; this.vel.z += dz * s; }
+    // reversing at speed: a quick heels-in skid, still facing the old way
+    const hv = Math.hypot(this.vel.x, this.vel.z);
+    this.skid = this.grounded && !this.action && !this.guard && mag > 0.1 && hv > 3.5 && (this.vel.x * wish.x + this.vel.z * wish.z) < -0.45 * hv;
+    if (this.skid) { if (!this.skidT) audio.play('step', { volume: 0.5, pitch: 0.7 }); this.skidT = 0.2; }
+    this.skidT = Math.max(0, (this.skidT || 0) - dt);
+    if (this.skidT > 0 && this.grounded && Math.random() < 0.6) g.fx.puff(_a.copy(this.pos).addScaledVector(wish, -0.3), 1, 0x5a5a90, 0.35);
     // facing: with the shield up, snap toward the nearest threat
     const threat = this.guard ? this.threatYaw() : null;
     if (threat !== null) this.yaw += angDiff(this.yaw, threat) * (1 - Math.exp(-dt * 24));
     else if (mag > 0.1 && !attacking && this.action !== 'plunge' && this.action !== 'plungeLand' && this.action !== 'hurt') {
       const target = Math.atan2(wish.x, wish.z);
-      this.yaw += angDiff(this.yaw, target) * (1 - Math.exp(-dt * (this.guard ? 6 : 16)));
+      this.yaw += angDiff(this.yaw, target) * (1 - Math.exp(-dt * (this.guard ? 6 : this.skid ? 2 : 16)));
     }
 
     // --- vertical
@@ -201,14 +209,14 @@ export class Player {
       if (this.actionT < 0.16) { this.vel.y = Math.max(this.vel.y * 0.5, 0.5); grav = 0; }
       else { this.vel.y = -34; grav = 0; }
     }
-    this.vel.y = Math.max(-t.maxFall - (this.action === 'plunge' ? 6 : 0), this.vel.y - grav * dt);
+    this.vel.y = Math.max(-t.maxFall - (this.action === 'plunge' ? 6 : 0) - (this.ballistic ? 60 : 0), this.vel.y - grav * dt);
 
     // --- moving platforms: carry the rider exactly (slide + spin) ourselves
     let carried = false;
     if (this.platform && this.grounded) {
       const d = this.platform.carry ? this.platform.carry(this.pos) : this.platform.delta;
       this.pos.add(d); this.char.teleport(this.pos); carried = true;
-      if (this.platform.yawDelta) { this.yaw += this.platform.yawDelta; this.cam.yaw += this.platform.yawDelta; }
+      if (this.platform.yawDelta) { this.yaw += this.platform.yawDelta; this.cam.yaw += this.platform.yawDelta; if (this.prevYaw !== undefined) this.prevYaw += this.platform.yawDelta; }
     }
 
     // --- collide & move
@@ -242,6 +250,7 @@ export class Player {
 
     // --- landing
     this.landed = 0;
+    if (this.grounded || this.action === 'hurt') this.ballistic = false;
     if (!wasGrounded && this.grounded) {
       const fall = Math.max(0, -vyBefore);
       this.landed = fall;
@@ -300,9 +309,10 @@ export class Player {
     this.root.rotation.y = this.yaw;
     const blink = this.invuln > 0 && !this.dead && Math.floor(this.invuln * 16) % 2 === 0;
     this.root.visible = !blink;
+    const turn = dt > 0 ? angDiff(this.prevYaw ?? this.yaw, this.yaw) / dt : 0; this.prevYaw = this.yaw;
     this.hero.update(dt, {
       speed: this.grounded ? hs : 0, grounded: this.grounded, vy: this.vel.y, action: this.dead ? null : this.action, actionT: this.actionT,
-      guard: this.guard, hpFrac: this.hp / this.maxHp, landed: this.landed, dead: this.dead,
+      guard: this.guard, hpFrac: this.hp / this.maxHp, landed: this.landed, dead: this.dead, turn, skid: this.skidT > 0 && !this.action,
     });
     this.hero.rig.setFlash(this.parryFlash > 0 ? this.parryFlash * 3 : 0);
     if (this.guard && this.guardT < t.parry && Math.random() < 0.6) g.fx.twinkle(this.hero.shield.getWorldPosition(_a), 0xfff0a0, 0.7);

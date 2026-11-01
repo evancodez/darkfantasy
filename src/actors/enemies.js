@@ -21,7 +21,7 @@ export class Orb {
     this.game = game; this.pos = pos.clone(); this.vel = vel.clone(); this.owner = o.owner; this.dmg = o.dmg ?? 1;
     this.homing = o.homing ?? 0; this.life = o.life ?? 6; this.age = 0; this.reflectDmg = o.reflectDmg ?? 3;
     this.color = new THREE.Color(o.color ?? 0x40ff70); this.size = o.size ?? 1; this.gravity = o.gravity ?? 0; this.kind = o.kind || 'orb';
-    this.onImpact = o.onImpact; this.unparryable = o.unparryable;
+    this.onImpact = o.onImpact; this.unparryable = o.unparryable; this.hitSound = o.hitSound; this.kb = o.kb;
     this.mesh = new THREE.Mesh(ORB_GEO, retroMat({ color: this.color, emit: 1, fog: 0.3 }));
     this.mesh.scale.setScalar(this.size);
     game.scene.add(this.mesh);
@@ -32,7 +32,7 @@ export class Orb {
   remove() { this.removed = true; this.mesh.removeFromParent(); Lights.remove(this.light); }
   explode(color = this.color) {
     this.game.fx.pop(this.pos, color.getHex(), 10);
-    audio.play(this.kind === 'fireball' ? 'fireballHit' : this.kind === 'potion' ? 'potionSmash' : 'orbHit', { volume: 0.8 });
+    audio.play(this.hitSound || (this.kind === 'fireball' ? 'fireballHit' : this.kind === 'potion' ? 'potionSmash' : 'orbHit'), { volume: 0.8 });
     this.onImpact?.(this);
     this.remove();
   }
@@ -68,7 +68,7 @@ export class Orb {
     if (hit !== null && this.age > 0.05) return this.explode();
     if (!this.reflected && p && !p.dead) {
       if (this.pos.distanceTo(_a.copy(p.pos).setY(p.pos.y + 0.85)) < 0.55 + 0.25 * this.size) {
-        const r = p.receive({ dmg: this.dmg, from: this.pos.clone().sub(this.vel.clone().normalize()), kind: 'projectile', source: this, unblockable: this.unparryable && false });
+        const r = p.receive({ dmg: this.dmg, from: this.pos.clone().sub(this.vel.clone().normalize()), kind: 'projectile', source: this, unblockable: this.unparryable && false, kb: this.kb });
         if (r === 'hit' || r === 'block') return this.explode(r === 'block' ? new THREE.Color(0xa0c0ff) : this.color);
       }
     }

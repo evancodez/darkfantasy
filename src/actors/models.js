@@ -134,7 +134,7 @@ export function bat() {
 // ------------------------------------------------------------------ black knight
 export function knight() {
   const m = {
-    armor: retroMat({ map: T.metal, chrome: 0.85, env: T.chrome, color: 0x5a4a8a, spec: 0.9, shine: 26, rim: 0.5 }),
+    armor: retroMat({ map: T.metal, chrome: 0.6, env: T.chrome, color: 0x5a4a8a, spec: 0.4, shine: 16, rim: 0.3, edge: 0.35 }),
     dark: retroMat({ map: T.iron, rim: 0.3 }),
     horn: retroMat({ map: T.horn, rim: 0.4, spec: 0.5 }),
     eye: retroMat({ color: 0xff3018, emit: 1, fog: 0.3 }),
@@ -223,7 +223,7 @@ export function witch() {
   return { rig, root: rig.root, m };
 }
 
-const BUILDERS = { scarecrow, cultist, skull, bat, knight, witch };
+export const BUILDERS = { scarecrow, cultist, skull, bat, knight, witch };
 export function build(who) {
   const b = BUILDERS[who]();
   b.update = b.update || (() => {});

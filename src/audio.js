@@ -136,6 +136,17 @@ function clipCurve() {
   }
   return c;
 }
+// Threshold gate for slow random control signals: 0 below th, eased up to 1.
+function gateCurve(th) {
+  const key = 'g' + th;
+  let c = S.curves.get(key);
+  if (c) return c;
+  const n = 512;
+  c = new Float32Array(n);
+  for (let i = 0; i < n; i++) { const y = clamp(((i / (n - 1)) * 2 - 1 - th) / (1 - th), 0, 1); c[i] = y * y; }
+  S.curves.set(key, c);
+  return c;
+}
 
 // ------------------------------------------------------------- buffers
 // White / pink / brown noise, 2 s each, with a crossfaded loop seam.
@@ -237,6 +248,50 @@ function makeCrickets(c) {
         }
       }
     }
+  }
+  return b;
+}
+
+// Carousel works: a seamless 6 s stereo loop on a 0.75 s cycle. Crank clunk on
+// the beat, rod clank on the off-beat, gear ticks, steam chuffs every two
+// cycles and a few stick-slip wooden creaks (generated once, on first use).
+function makeCarousel(c) {
+  const sr = c.sampleRate, dur = 6, len = Math.floor(sr * dur), per = 0.75;
+  const b = c.createBuffer(2, len, sr), L = b.getChannelData(0), R = b.getChannelData(1);
+  const add = (ts, n, pan, fn) => {                 // fn(i) -> sample, wrapped into the loop
+    const s = Math.floor(ts * sr), gl = Math.cos((pan + 1) * Math.PI / 4), gr = Math.sin((pan + 1) * Math.PI / 4);
+    for (let i = 0; i < n; i++) { const x = fn(i), j = (s + i) % len; L[j] += x * gl; R[j] += x * gr; }
+  };
+  const ring = (ts, f, a, dec, pan) => add(ts, Math.floor(dec * sr * 5), pan, (i) => Math.sin(2 * Math.PI * f * i / sr) * Math.exp(-i / (dec * sr)) * a);
+  const tick = (ts, a, dec, pan) => add(ts, Math.floor(dec * sr * 5), pan, (i) => (Math.random() * 2 - 1) * Math.exp(-i / (dec * sr)) * a);
+  for (let k = 0; k < dur / per; k++) {
+    const t0 = k * per + rnd(0, 0.01), t1 = t0 + per / 2 + rnd(-0.012, 0.012), side = k % 2 ? 0.45 : -0.45;
+    ring(t0, rnd(60, 68), 0.45, 0.06, 0);                                       // crank thud
+    tick(t0, 0.2, 0.004, 0);
+    for (const [r, a] of [[1, 0.1], [2.32, 0.06], [3.86, 0.035]]) ring(t0, 405 * r * rnd(0.99, 1.01), a, 0.07, -0.15);
+    for (const [r, a] of [[1, 0.05], [2.71, 0.03], [5.1, 0.016]]) ring(t1, 780 * r * rnd(0.98, 1.02), a, 0.045, side);
+    tick(t1, 0.08, 0.003, side);
+    for (let q = 1; q < 6; q++) if (q !== 3) tick(t0 + q * per / 6, 0.03 * rnd(0.6, 1), 0.0015, 0.2);
+    if (k % 2 === 0) {                                                          // steam chuff
+      let x0 = 0;
+      add(t0 + 0.05, Math.floor(sr * 0.6), 0.3, (i) => {
+        const w = Math.random() * 2 - 1, y = w - x0, e = i / sr;
+        x0 = w;
+        return y * 0.05 * Math.min(1, e / 0.06) * Math.exp(-e / 0.18);
+      });
+    }
+  }
+  for (let k = 0; k < 3; k++) {                                                 // wooden creaks
+    const n = Math.floor(sr * rnd(0.25, 0.45)), w = 2 * Math.PI * rnd(520, 820) / sr, r = 0.995;
+    const c1 = 2 * r * Math.cos(w), c2 = -r * r;
+    let y1 = 0, y2 = 0, next = 0, rate = rnd(25, 40);
+    add(k * 2 + rnd(0.2, 1.4), n, rnd(-0.6, 0.6), (i) => {
+      let x = 0;
+      if (i >= next) { x = 1; rate *= rnd(0.97, 1.05); next = i + sr / rate; }
+      const y = c1 * y1 + c2 * y2 + x;
+      y2 = y1; y1 = y;
+      return y * 0.01 * Math.sin(Math.PI * i / n);
+    });
   }
   return b;
 }
@@ -654,6 +709,26 @@ function choir(v, to, t, notes, dur, opt = {}) {
     for (const dt of [-8, 8]) buzz(v, f, t, end, g, rnd(4.5, 5.8), 0.006).detune.value = dt + rnd(-3, 3);
   }
   return bank;
+}
+// Calliope / band-organ pipe: two mistuned flute ranks + a soft principal
+// octave, scooped attack, steam breath + chiff, tremulant wow and flutter.
+function calliope(v, to, t, m, vel = 1, len = 0.4) {
+  const f = mtof(m) * Math.pow(2, rnd(-6, 6) / 1200), L = Math.max(len, 0.08), end = t + L + 0.18;
+  const g = v.gain(0, to), trem = v.gain(0.88, g), lp = v.filter('lowpass', Math.min(f * 7, 7500), 0.6, trem);
+  const a = v.osc(wave('flute'), f, t, end, lp);
+  const b = v.osc(wave('flute'), f, t, end, v.gain(0.6, lp));
+  const c = v.osc(wave('principal'), f * 2, t, end, v.gain(0.14, lp));
+  b.detune.value = rnd(8, 14);                       // the out-of-tune second rank
+  for (const o of [a, b, c]) glide(o.frequency, t, o.frequency.value * 0.975, o.frequency.value, 0.045);
+  const w = lfo(v, rnd(5.6, 6.6), f * 0.0045, a.frequency, t, end);
+  w.g.connect(b.frequency);
+  w.osc.connect(v.gain(0.12, trem.gain));            // tremulant: pitch + amplitude
+  wander(v, 4, f * 0.003, a.frequency, t, end);      // flutter
+  const br = v.gain(0, to);
+  v.noise('white', t, end, v.filter('bandpass', Math.min(f * 2, 9000), 1.2, br));
+  ahr(br.gain, t, 0.02, 0.035 * vel, L * 0.5, 0.15);
+  burst(v, to, t, 'white', 'bandpass', Math.min(f * 3.5, 9000), 2.5, 0.002, 0.035, 0.03 * vel);
+  ahr(g.gain, t, 0.02, 0.08 * vel, Math.max(L - 0.02, 0), 0.12);
 }
 
 // =============================================================================
@@ -1295,6 +1370,360 @@ const SFX = {
     timp(v, o, T3, 38 + k, 1, 1.4);
   },
 
+  // ----------------------------------------------------- midnight carnival
+  // Golden Moon Ticket: paper flick, G-major music-box run, bell sparkle.
+  ticket(v) {
+    const { t, out: o, p } = v, k = semi(v);
+    burst(v, o, t, 'white', 'highpass', 3000, 0.8, 0.001, 0.025, 0.25);
+    burst(v, o, t + 0.035, 'white', 'bandpass', 4200 * p, 1.5, 0.001, 0.03, 0.18);
+    whoosh(v, o, t, 2500 * p, 6000 * p, 0.12, 0.08, 1.5, 'white', 0.3);
+    [86, 91, 95, 98].forEach((m, i) => celesta(v, o, t + 0.05 + i * 0.05, m + k, 0.85, 1.1));
+    ping(v, o, t + 0.2, mtof(103 + k), 0.04, 0.6);
+    shimmer(v, o, t + 0.1, mtof(98 + k), 0.02, 1.0);
+    sparkle(v, o, t + 0.15, 7, 0.6, 0.035, 93, 105);
+  },
+  // Jack-in-the-box wind-up: crank ratchet, then a rising diminished music box.
+  jackCrank(v) {
+    const { t, out: o, p } = v, k = semi(v);
+    for (let i = 0; i < 6; i++) {
+      const tt = t + i * 0.045;
+      burst(v, o, tt, 'white', 'bandpass', 3200 * p, 5, 0.0004, 0.012, 0.22);
+      partials(v, o, tt, 1700 * p, [1, 2.4], [0.03, 0.015], [0.02, 0.012]);
+    }
+    thump(v, o, t, 180 * p, 110, 0.05, 0.12, 'triangle');
+    [86, 89, 92].forEach((m, i) => celesta(v, o, t + 0.3 + i * 0.13, m + k, 0.8, i === 2 ? 1.0 : 0.6));
+  },
+  jackPop(v) {
+    const { t, out: o, p } = v;
+    burst(v, o, t, 'pink', 'lowpass', 2500, 0.7, 0.001, 0.05, 0.4);
+    thump(v, o, t, 300 * p, 120, 0.06, 0.35, 'triangle');
+    const g = v.gain(0, o), s = v.osc('triangle', 180 * p, t, t + 0.6, v.filter('lowpass', 2500, 2, g));
+    path(s.frequency, t, [[0, 150 * p], [0.06, 420 * p], [0.55, 360 * p]]);
+    const w = lfo(v, 28, 90 * p, s.frequency, t, t + 0.6);              // spring wobble
+    w.g.gain.setValueAtTime(90 * p, t);
+    w.g.gain.exponentialRampToValueAtTime(4, t + 0.55);
+    ad(g.gain, t, 0.004, 0.25, 0.5);
+    partials(v, o, t, 820 * p, [1, 1.83, 2.9], [0.03, 0.02, 0.012], [0.35, 0.25, 0.15]);
+    burst(v, o, t + 0.02, 'white', 'highpass', 7000, 0.8, 0.001, 0.12, 0.12);   // cymbal tick
+    partials(v, o, t + 0.02, 5200 * p, [1, 1.37, 1.79], [0.015, 0.012, 0.008], [0.15, 0.12, 0.1]);
+  },
+  // Clockwork key: two turns of ratchet clicks over a tightening spring.
+  windup(v) {
+    const { t, out: o, p } = v, n = 12;
+    for (let i = 0; i < n; i++) {
+      const tt = t + i * 0.048 + rnd(0, 0.006), up = i / n;
+      burst(v, o, tt, 'white', 'bandpass', (2600 + up * 900) * p, 6, 0.0004, 0.01, i % 6 === 0 ? 0.26 : 0.17);
+      partials(v, o, tt, (1300 + up * 500) * p, [1, 2.7], [0.025, 0.012], [0.025, 0.015]);
+    }
+    const g = v.gain(0, o), s = v.osc('triangle', 280 * p, t, t + 0.65, v.filter('bandpass', 900 * p, 2, g));
+    glide(s.frequency, t, 280 * p, 520 * p, 0.6);
+    ahr(g.gain, t, 0.1, 0.05, 0.35, 0.15);
+    const cg = v.gain(0, o), cs = v.osc('sawtooth', 40 * p, t, t + 0.65, v.filter('bandpass', 700 * p, 4, cg));
+    wander(v, 20, 10, cs.frequency, t, t + 0.65);                         // key creak
+    ahr(cg.gain, t, 0.05, 0.08, 0.4, 0.15);
+  },
+  tinStep(v) {
+    const { t, out: o, p } = v, f = rnd(1400, 2000) * p;
+    burst(v, o, t, 'white', 'bandpass', f * 1.6, 2, 0.0005, 0.02, 0.12);
+    partials(v, o, t, f, [1, 1.53, 2.31], [0.03, 0.02, 0.012], [0.07, 0.05, 0.035]);
+    thump(v, o, t, rnd(260, 330) * p, 160, 0.03, 0.08, 'triangle');
+  },
+  // Blade on a hollow tin body: edge ring, resonant can, flexing panel.
+  tinClang(v) {
+    const { t, out: o, p } = v;
+    metal(v, o, t, 1250 * p, 0.07, 0.22, 1);
+    partials(v, o, t, 470 * p, [1, 1.52, 2.17, 2.9, 4.05], [0.11, 0.07, 0.05, 0.03, 0.02], [0.32, 0.24, 0.18, 0.12, 0.08]);
+    const body = v.filter('bandpass', 620 * p, 9, v.gain(1.4, o));
+    burst(v, body, t, 'white', 'lowpass', 4000, 0.7, 0.0005, 0.08, 0.6);
+    thump(v, o, t, 230 * p, 130, 0.07, 0.35, 'triangle');
+    burst(v, o, t, 'white', 'bandpass', 3400 * p, 1, 0.001, 0.05, 0.3);
+    const g = v.gain(0, o), s = v.osc('sine', 470 * p, t, t + 0.35, g);
+    lfo(v, 26, 22 * p, s.frequency, t, t + 0.35);
+    ad(g.gain, t, 0.003, 0.05, 0.3);
+  },
+  // Tin soldier topples: bouncing clatter, a loose spring, the key unwinding.
+  tinFall(v) {
+    const { t, out: o, p } = v;
+    [0, 0.16, 0.29, 0.39, 0.47, 0.53, 0.58].forEach((dt, i) => {
+      const a = 0.9 - i * 0.11, f = rnd(600, 1300) * p;
+      partials(v, v.pan(rnd(-0.4, 0.4), o), t + dt, f, [1, 1.51, 2.27, 3.1], [0.05 * a, 0.035 * a, 0.02 * a, 0.012 * a], [0.18, 0.13, 0.09, 0.06]);
+      burst(v, o, t + dt, 'white', 'bandpass', f * 2.2, 1.5, 0.0005, 0.03, 0.18 * a);
+      if (i < 2) thump(v, o, t + dt, 200 * p, 100, 0.08, 0.3 * a, 'triangle');
+    });
+    const T = t + 0.3, g = v.gain(0, o), s = v.osc('triangle', 520 * p, T, T + 0.75, v.filter('lowpass', 2200, 1.5, g));
+    path(s.frequency, T, [[0, 520 * p], [0.7, 300 * p]]);
+    const w = lfo(v, 24, 120 * p, s.frequency, T, T + 0.75);
+    w.g.gain.setValueAtTime(120 * p, T);
+    w.g.gain.exponentialRampToValueAtTime(3, T + 0.7);
+    ad(g.gain, T, 0.003, 0.14, 0.7);
+    for (let i = 0; i < 4; i++) burst(v, o, t + 0.7 + i * (0.08 + i * 0.03), 'white', 'bandpass', 2600 * p, 6, 0.0004, 0.01, 0.12 * (1 - i * 0.2));
+  },
+  impGiggle(v) {
+    const { t, out: o, p } = v, n = 3 + ((Math.random() * 3) | 0), st = 0.085;
+    const bank = formants(v, 'i', o, 1.3, 1);
+    const g = v.gain(0, bank.inp), end = t + n * st + 0.15;
+    const s = v.osc('sawtooth', 950 * p, t, end, g);
+    lfo(v, 11, 25 * p, s.frequency, t, end);
+    g.gain.setValueAtTime(0, t);
+    for (let i = 0; i < n; i++) {
+      const ts = t + i * st + rnd(0, 0.012), f0 = (1050 - i * 40 + rnd(-40, 40)) * p * (i === 0 ? 1.12 : 1);
+      s.frequency.setValueAtTime(f0, ts);
+      s.frequency.exponentialRampToValueAtTime(f0 * 1.18, ts + 0.05);
+      g.gain.setValueAtTime(0, ts);
+      g.gain.linearRampToValueAtTime(0.22, ts + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.04, ts + 0.04);
+      g.gain.exponentialRampToValueAtTime(E, ts + 0.065);
+      sayVowel(bank, i % 2 ? 'e' : 'i', ts, 0.015);
+      burst(v, bank.inp, Math.max(t, ts - 0.008), 'white', 'highpass', 2500, 0.7, 0.006, 0.025, 0.12);
+    }
+  },
+  impThrow(v) {
+    const { t, out: o, p } = v;
+    whoosh(v, o, t, 700 * p, 2600 * p, 0.22, 0.22, 1.3, 'pink', 0.4);
+    whoosh(v, o, t, 2000 * p, 6000 * p, 0.2, 0.06, 2, 'white', 0.5);
+    [93, 98].forEach((m, i) => ping(v, o, t + 0.06 + i * 0.05, mtof(m) * p, 0.05, 0.3));
+  },
+  starShot(v) {
+    const { t, out: o, p } = v;
+    const g = v.gain(0, o), car = v.osc('sine', 700 * p, t, t + 0.4, g);
+    glide(car.frequency, t, 700 * p, 2100 * p, 0.2);
+    v.osc('sine', 1400 * p, t, t + 0.4, v.gain(600 * p, car.frequency));
+    ad(g.gain, t, 0.004, 0.11, 0.32);
+    whoosh(v, o, t, 1500 * p, 6000 * p, 0.28, 0.1, 1.8, 'white', 0.25);
+    burst(v, o, t, 'white', 'highpass', 5000, 0.7, 0.0005, 0.03, 0.12);
+    sparkle(v, o, t + 0.02, 5, 0.3, 0.035, 94, 106);
+  },
+  starHit(v) {
+    const { t, out: o, p } = v;
+    burst(v, o, t, 'white', 'highpass', 3500, 0.7, 0.0005, 0.08, 0.4);
+    burst(v, o, t, 'pink', 'bandpass', 1800 * p, 1, 0.001, 0.06, 0.3);
+    thump(v, o, t, 320 * p, 160, 0.05, 0.2, 'triangle');
+    for (let i = 0; i < 5; i++) {
+      partials(v, v.pan(rnd(-0.5, 0.5), o), t + rnd(0, 0.05), rnd(2800, 5200) * p, [1, 1.47, 2.09], [0.035, 0.022, 0.012], [0.2, 0.14, 0.09]);
+    }
+    ping(v, o, t, mtof(96) * p, 0.06, 0.5);
+    ping(v, o, t + 0.03, mtof(101) * p, 0.04, 0.4);
+  },
+  balloonPop(v) {
+    const { t, out: o, p } = v;
+    burst(v, o, t, 'white', 'lowpass', 6000, 0.7, 0.0003, 0.03, 0.6);
+    burst(v, o, t, 'pink', 'bandpass', 900 * p, 0.8, 0.0005, 0.06, 0.45);
+    thump(v, o, t, 220 * p, 70, 0.08, 0.5);
+    const g = v.gain(0, o), s = v.osc('sawtooth', 420 * p, t + 0.01, t + 0.1, v.filter('bandpass', 1400 * p, 3, g));
+    glide(s.frequency, t + 0.01, 420 * p, 160 * p, 0.07);                // rubber flap
+    ad(g.gain, t + 0.01, 0.002, 0.1, 0.06);
+  },
+  // Ride start: "ding-ding-ding", the mechanism clunks in, steam hisses.
+  rideBell(v) {
+    const { t, out: o, p } = v, T = t + 0.5;
+    for (let i = 0; i < 3; i++) {
+      const tt = t + i * 0.16;
+      partials(v, o, tt, 1180 * p, [1, 2.01, 2.76, 4.1, 5.43], [0.07, 0.035, 0.04, 0.02, 0.012], [0.9, 0.6, 0.5, 0.3, 0.2]);
+      burst(v, o, tt, 'white', 'highpass', 5000, 0.7, 0.0005, 0.01, 0.08);
+    }
+    thump(v, o, T, 95 * p, 42, 0.3, 0.7);
+    burst(v, o, T, 'pink', 'lowpass', 1100, 0.7, 0.001, 0.08, 0.45);
+    metal(v, o, T, 240 * p, 0.05, 0.3, 0.5);
+    thump(v, o, T + 0.09, 140 * p, 70, 0.1, 0.3);
+    burst(v, o, T + 0.09, 'white', 'bandpass', 1800 * p, 4, 0.0005, 0.02, 0.2);
+    const hg = v.gain(0, o), hiss = v.gain(0.7, hg);
+    v.noise('white', T + 0.06, T + 1.5, v.filter('highpass', 3200, 0.7, hiss));
+    wander(v, 25, 0.25, hiss.gain, T + 0.06, T + 1.5);
+    ahr(hg.gain, T + 0.06, 0.05, 0.22, 0.4, 0.9);
+  },
+  // Thick puppet string: tense twang, whip-crack of the loose end.
+  stringSnap(v) {
+    const { t, out: o, p } = v;
+    burst(v, o, t, 'white', 'highpass', 2500, 0.7, 0.0003, 0.02, 0.5);
+    thump(v, o, t, 400 * p, 200, 0.03, 0.2, 'triangle');
+    const g = v.gain(0, o), lp = v.filter('lowpass', 5000, 3, g);
+    const s1 = v.osc('sawtooth', 210 * p, t, t + 0.75, lp), s2 = v.osc('square', 210 * p, t, t + 0.75, v.gain(0.4, lp));
+    s2.detune.value = 9;
+    for (const s of [s1, s2]) path(s.frequency, t, [[0, 260 * p], [0.04, 200 * p], [0.7, 188 * p]]);
+    lfo(v, 17, 9 * p, s1.frequency, t, t + 0.75).g.connect(s2.frequency);
+    path(lp.frequency, t, [[0, 6500], [0.5, 450]]);
+    ad(g.gain, t, 0.001, 0.22, 0.6);
+    whoosh(v, o, t + 0.02, 3500 * p, 700 * p, 0.22, 0.22, 1.6, 'white', 0.25);
+    burst(v, o, t + 0.2, 'white', 'bandpass', 2600 * p, 1.5, 0.0005, 0.02, 0.3);
+  },
+  // Marionette Queen: slowing, falling "ha-ha-ha" with a sub-octave and a thin
+  // octave ghost, jaw clacks, a creaking hinge and a slap-back hall.
+  queenLaugh(v) {
+    const { t, out: o, p } = v, n = 6, end = t + 1.55;
+    const e = echo(v, o, 0.19, 0.3, 0.35, t + 2.4);
+    const bank = formants(v, 'a', v.shaper(driveCurve(1.3), v.gain(0.8, e)), 0.85, 1);
+    const g = v.gain(0, bank.inp);
+    const s1 = v.osc('sawtooth', 210 * p, t, end, g);
+    const s2 = v.osc('sawtooth', 105 * p, t, end, v.gain(0.4, g));
+    const s3 = v.osc('sawtooth', 421 * p, t, end, v.gain(0.12, g));
+    s3.detune.value = 14;
+    lfo(v, 5, 4, s1.frequency, t, end);
+    g.gain.setValueAtTime(0, t);
+    for (let i = 0; i < n; i++) {
+      const ts = t + i * 0.19 + i * i * 0.012, f0 = (215 - i * 15) * p;
+      [[s1, 1], [s2, 0.5], [s3, 2.005]].forEach(([s, r]) => {
+        s.frequency.setValueAtTime(f0 * r, ts);
+        s.frequency.exponentialRampToValueAtTime(f0 * r * 0.82, ts + 0.15);
+      });
+      g.gain.setValueAtTime(0, ts);
+      g.gain.linearRampToValueAtTime(0.3, ts + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.1, ts + 0.1);
+      g.gain.exponentialRampToValueAtTime(E, ts + 0.16);
+      sayVowel(bank, i === n - 1 ? 'o' : 'a', ts, 0.03);
+      burst(v, bank.inp, Math.max(t, ts - 0.01), 'white', 'highpass', 1200, 0.7, 0.008, 0.04, 0.2);
+      burst(v, o, ts, 'white', 'bandpass', 950 * p, 7, 0.0005, 0.015, 0.25);   // jaw clack
+    }
+    const cg = v.gain(0, e), cs = v.osc('sawtooth', 32 * p, t, end, v.filter('bandpass', 620 * p, 5, cg));
+    wander(v, 6, 9, cs.frequency, t, end);                                  // hinge creak
+    wander(v, 3, 120, cs.frequency, t, end);
+    ahr(cg.gain, t, 0.2, 0.3, 0.9, 0.4);
+  },
+  // Giant scissor-arm sweep: heavy air, rising scrape, metallic snip.
+  queenSwipe(v) {
+    const { t, out: o, p } = v, T = t + 0.5;
+    whoosh(v, o, t, 200 * p, 900 * p, 0.6, 0.55, 0.8, 'pink', 0.6);
+    whoosh(v, o, t + 0.1, 600 * p, 2600 * p, 0.5, 0.18, 2, 'white', 0.65);
+    thump(v, o, t, 70 * p, 45, 0.4, 0.2);
+    const sg = v.gain(0, o), sbp = v.filter('bandpass', 3000 * p, 6, sg);
+    v.noise('white', T - 0.12, T + 0.05, sbp);
+    glide(sbp.frequency, T - 0.12, 2500 * p, 5500 * p, 0.12);
+    ahr(sg.gain, T - 0.12, 0.1, 0.25, 0.01, 0.03);
+    metal(v, o, T, 2100 * p, 0.06, 0.25, 1);
+    burst(v, o, T, 'white', 'highpass', 4500, 0.7, 0.0005, 0.03, 0.4);
+    ping(v, o, T, 3400 * p, 0.03, 0.3);
+  },
+  // Giant wooden limb on the stage: deep thump, board crack, splinters, dust.
+  queenSlam(v) {
+    const { t, out: o, p } = v;
+    thump(v, v.shaper(driveCurve(2), v.gain(0.9, o)), t, 85 * p, 30, 0.6, 1.0);
+    burst(v, o, t, 'brown', 'lowpass', 250, 0.8, 0.005, 0.8, 0.8);
+    const wood = v.filter('bandpass', 380 * p, 5, v.gain(1.3, o));
+    burst(v, wood, t, 'white', 'lowpass', 3000, 0.7, 0.0008, 0.09, 0.7);
+    burst(v, o, t, 'pink', 'bandpass', 900 * p, 1.2, 0.001, 0.1, 0.45);
+    burst(v, o, t + 0.01, 'white', 'bandpass', 2200 * p, 3, 0.0005, 0.02, 0.4);
+    for (let i = 0; i < 6; i++) {
+      burst(v, v.pan(rnd(-0.6, 0.6), o), t + 0.04 + rnd(0, 0.3), 'white', 'bandpass', rnd(600, 1800) * p, 4, 0.0005, rnd(0.01, 0.03), rnd(0.08, 0.18));
+    }
+    const dg = v.gain(0, o);
+    v.noise('pink', t + 0.05, t + 1.5, v.filter('bandpass', 2500, 0.6, dg));
+    ahr(dg.gain, t + 0.05, 0.1, 0.08, 0.2, 1.0);
+  },
+  // Wood cracks and the music box inside goes out of tune.
+  queenHurt(v) {
+    const { t, out: o, p } = v, k = semi(v);
+    const wood = v.filter('bandpass', 520 * p, 6, v.gain(1.2, o));
+    burst(v, wood, t, 'white', 'lowpass', 3500, 0.7, 0.0008, 0.07, 0.6);
+    burst(v, o, t, 'white', 'bandpass', 1800 * p, 2, 0.0005, 0.04, 0.4);
+    thump(v, o, t, 160 * p, 80, 0.12, 0.45, 'triangle');
+    crackle(v, o, t + 0.01, 0.2, 0.3, 2500);
+    [[0.05, 89], [0.12, 88.4], [0.2, 83], [0.31, 82.3], [0.45, 77.4]].forEach(([dt, m]) => celesta(v, o, t + dt, m + k, 0.7, 0.9));
+    const g = v.gain(0, o), s = v.osc('sine', mtof(84 + k), t + 0.05, t + 1.0, g);
+    glide(s.frequency, t + 0.05, mtof(84 + k), mtof(79 + k), 0.9);          // spring running down
+    lfo(v, 7, 12, s.frequency, t + 0.05, t + 1.0);
+    ahr(g.gain, t + 0.05, 0.02, 0.03, 0.4, 0.45);
+  },
+  puppetClatter(v) {
+    const { t, out: o, p } = v, n = 16;
+    thump(v, o, t, 140 * p, 60, 0.15, 0.4);
+    for (let i = 0; i < n; i++) {
+      const tt = t + Math.pow(i / n, 1.3) * 1.0 + rnd(0, 0.04), a = (i < 4 ? 1 : 0.6) * rnd(0.6, 1);
+      const wood = v.filter('bandpass', rnd(500, 1600) * p, 8, v.gain(1.2, v.pan(rnd(-0.5, 0.5), o)));
+      burst(v, wood, tt, 'white', 'lowpass', 4000, 0.7, 0.0005, 0.03, 0.5 * a);
+      if (Math.random() < 0.3) thump(v, o, tt, rnd(120, 200) * p, 70, 0.08, 0.2 * a, 'triangle');
+    }
+  },
+  // Heavy velvet curtain: muffled fabric swell, rings sliding on the rail.
+  curtain(v) {
+    const { t, out: o, p } = v, D = 1.9;
+    const g = v.gain(0, o), rough = v.gain(0.75, g), lp = v.filter('lowpass', 400 * p, 0.7, rough);
+    v.noise('pink', t, t + D + 0.1, lp);
+    v.noise('brown', t, t + D + 0.1, v.filter('lowpass', 250, 0.7, v.gain(0.8, rough)));
+    wander(v, 6, 0.25, rough.gain, t, t + D + 0.1);
+    path(lp.frequency, t, [[0, 280 * p], [0.7, 1500 * p], [D, 350 * p]]);
+    ahr(g.gain, t, 0.55, 0.6, 0.55, 0.75);
+    whoosh(v, o, t + 0.15, 1200 * p, 3200 * p, 1.4, 0.05, 0.9, 'white', 0.45);
+    for (let i = 0; i < 11; i++) {
+      const tt = t + 0.12 + i * 0.085 + rnd(0, 0.03), f = rnd(2300, 2900) * p;
+      partials(v, o, tt, f, [1, 1.43], [0.014, 0.009], [0.07, 0.05]);
+      burst(v, o, tt, 'white', 'bandpass', 4200, 3, 0.0008, 0.012, 0.035);
+    }
+    thump(v, o, t + D - 0.2, 75 * p, 45, 0.3, 0.3);
+  },
+  confetti(v) {
+    const { t, out: o, p } = v;
+    burst(v, o, t, 'white', 'bandpass', 1900 * p, 0.8, 0.0005, 0.05, 0.55);
+    thump(v, o, t, 240 * p, 110, 0.06, 0.3, 'triangle');
+    const g = v.gain(0, o), flut = v.gain(0.5, g);
+    v.noise('white', t, t + 1.3, v.filter('bandpass', 5500, 0.9, flut));
+    wander(v, 45, 0.5, flut.gain, t, t + 1.3);                             // paper flutter
+    ahr(g.gain, t + 0.02, 0.06, 0.22, 0.25, 0.9);
+    for (let i = 0; i < 10; i++) {
+      burst(v, v.pan(rnd(-0.7, 0.7), o), t + 0.05 + rnd(0, 0.9), 'white', 'highpass', 6000, 0.7, 0.0005, 0.008, rnd(0.03, 0.07));
+    }
+    sparkle(v, o, t + 0.06, 9, 0.9, 0.032, 91, 106);
+  },
+  // Circus cannon: powder boom, fizz, slide whistle up as the hero flies.
+  cannon(v) {
+    const { t, out: o, p } = v;
+    const drive = v.shaper(driveCurve(2.2), v.gain(0.9, o));
+    thump(v, drive, t, 110 * p, 32, 0.5, 1);
+    const lp = burst(v, drive, t, 'pink', 'lowpass', 3500, 0.7, 0.001, 0.7, 0.8);
+    glide(lp.frequency, t, 3500, 250, 0.6);
+    burst(v, o, t, 'brown', 'lowpass', 220, 0.7, 0.005, 1.0, 0.6);
+    burst(v, o, t, 'white', 'bandpass', 1500, 0.8, 0.0005, 0.04, 0.4);
+    crackle(v, o, t + 0.02, 0.3, 0.25, 2000);
+    const T = t + 0.08, g = v.gain(0, o), s = v.osc('sine', 450 * p, T, T + 1.1, g);
+    const s2 = v.osc('triangle', 450 * p, T, T + 1.1, v.gain(0.25, g));
+    for (const x of [s, s2]) path(x.frequency, T, [[0, 450 * p], [0.9, 2200 * p]]);
+    lfo(v, 7, 15 * p, s.frequency, T, T + 1.1).g.connect(s2.frequency);
+    ahr(g.gain, T, 0.06, 0.13, 0.65, 0.3);
+    whoosh(v, o, t + 0.05, 500 * p, 3000 * p, 0.9, 0.2, 1, 'pink', 0.3);
+  },
+  // Moon-gate: low swell under a Gmaj9 that rises into tune, star sparkle.
+  portalOpen(v) {
+    const { t, out: o, p } = v, k = semi(v), D = 2.0;
+    const g = v.gain(0, o), lp = v.filter('lowpass', 150, 0.9, g);
+    for (const dt of [-8, 8]) v.osc('sawtooth', mtof(31 + k), t, t + D + 0.1, lp).detune.value = dt;
+    path(lp.frequency, t, [[0, 120], [1.3, 700], [D, 250]]);
+    ahr(g.gain, t, 1.1, 0.22, 0.3, 0.6);
+    [55, 62, 69, 71, 74, 78, 81, 86].forEach((m, i) => {
+      const tt = t + i * 0.12, f = mtof(m + k), sg = v.gain(0, v.pan((i % 2 ? 1 : -1) * 0.35, o));
+      const a = v.osc('sine', f, tt, t + D + 0.1, sg), b = v.osc('triangle', f, tt, t + D + 0.1, v.gain(0.3, sg));
+      b.detune.value = 7;
+      glide(a.frequency, tt, f * 0.94, f, 0.5);
+      glide(b.frequency, tt, f * 0.94, f, 0.5);
+      lfo(v, 5 + i * 0.4, f * 0.006, a.frequency, tt, t + D + 0.1);
+      ahr(sg.gain, tt, 0.3, 0.035, Math.max(D - 0.9 - i * 0.12, 0.05), 0.5);
+    });
+    whoosh(v, o, t, 300 * p, 5000 * p, D * 0.9, 0.1, 1.2, 'pink', 0.8);
+    sparkle(v, o, t + 0.9, 10, 1.0, 0.03, 91, 106);
+  },
+  portalEnter(v) {
+    const { t, out: o, p } = v;
+    const e = echo(v, o, 0.21, 0.4, 0.45, t + 2.4);
+    whoosh(v, e, t, 400 * p, 3500 * p, 0.5, 0.4, 1, 'pink', 0.7);
+    whoosh(v, e, t + 0.35, 4000 * p, 200 * p, 0.8, 0.35, 0.9, 'pink', 0.15);
+    const g = v.gain(0, e), s = v.osc('sine', 1600 * p, t + 0.3, t + 1.3, g);
+    glide(s.frequency, t + 0.3, 1600 * p, 110 * p, 0.9);
+    lfo(v, 12, 30 * p, s.frequency, t + 0.3, t + 1.3);
+    ad(g.gain, t + 0.3, 0.02, 0.15, 0.9);
+    sparkle(v, e, t, 6, 0.4, 0.03, 94, 106);
+    thump(v, o, t + 0.4, 90 * p, 40, 0.4, 0.4);
+  },
+  // Paper lantern catching: soft whump, a few sparks, tiny chime.
+  lanternOn(v) {
+    const { t, out: o, p } = v, k = semi(v);
+    const g = v.gain(0, o), lp = v.filter('lowpass', 250, 0.8, g);
+    v.noise('pink', t, t + 0.45, lp);
+    glide(lp.frequency, t, 250, 1400, 0.1);
+    lp.frequency.exponentialRampToValueAtTime(400, t + 0.4);
+    ad(g.gain, t, 0.04, 0.4, 0.35);
+    thump(v, o, t, 120 * p, 60, 0.15, 0.2);
+    crackle(v, o, t + 0.05, 0.25, 0.12, 2000);
+    celesta(v, o, t + 0.12, 91 + k, 0.5, 1.0);
+    ping(v, o, t + 0.12, mtof(98 + k), 0.02, 0.4);
+  },
+
   // -------------------------------------------------------------- jingles
   // ~4 s: triplet pickup, then Bb - Gb - Ab - Bb (top line D - Db - Eb - F).
   victory(v) {
@@ -1364,6 +1793,11 @@ const SEND = {
   witchCackle: 0.3, potionThrow: 0.1, potionSmash: 0.18, witchFall: 0.25, dragonRoar: 0.35,
   dragonHurt: 0.3, dragonStep: 0.15, wingFlap: 0.1, fireball: 0.15, fireballHit: 0.25,
   dragonDie: 0.5, bossIntro: 0.4, victory: 0.45, death: 0.45,
+  ticket: 0.4, jackCrank: 0.15, jackPop: 0.15, windup: 0.08, tinStep: 0.03, tinClang: 0.15,
+  tinFall: 0.18, impGiggle: 0.25, impThrow: 0.12, starShot: 0.25, starHit: 0.25, balloonPop: 0.12,
+  rideBell: 0.35, stringSnap: 0.2, queenLaugh: 0.45, queenSwipe: 0.15, queenSlam: 0.3, queenHurt: 0.3,
+  puppetClatter: 0.25, curtain: 0.3, confetti: 0.3, cannon: 0.25, portalOpen: 0.5, portalEnter: 0.4,
+  lanternOn: 0.3,
 };
 // Output trim per sound (calibrated by rendering every sound offline and
 // matching short-term loudness: combat hits on top, music below them,
@@ -1377,13 +1811,18 @@ const LEVEL = {
   skullChatter: 6, skullLeap: 8, batScreech: 6, knightClang: 5.5, knightSwing: 3.4,
   potionThrow: 4, potionSmash: 6, witchFall: 0.8, dragonHurt: 0.8, dragonStep: 1.4,
   fireball: 2.2, fireballHit: 1.4, dragonDie: 0.7, bossIntro: 0.65, dragonRoar: 0.85, victory: 0.85,
+  ticket: 1.3, jackCrank: 1.6, jackPop: 2, windup: 5, tinStep: 3, tinClang: 2.8, tinFall: 2.4,
+  impGiggle: 5, impThrow: 3.5, starShot: 2.7, starHit: 2.4, balloonPop: 1.6, rideBell: 0.85,
+  stringSnap: 1.6, queenLaugh: 2.5, queenSwipe: 2.2, queenHurt: 2, puppetClatter: 1.8, curtain: 0.75,
+  confetti: 2, portalEnter: 1.4, lanternOn: 1.4,
 };
 // Dropped first when the voice cap is reached.
-const LOW = new Set(['step', 'mote', 'select', 'skullChatter', 'wingFlap', 'land', 'potionThrow']);
+const LOW = new Set(['step', 'mote', 'select', 'skullChatter', 'wingFlap', 'land', 'potionThrow',
+  'tinStep', 'impGiggle']);
 // Musical sounds: no random pitch jitter (keeps them in tune / chains in key).
 const NO_JITTER = new Set(['mote', 'motesBurst', 'sigil', 'secret', 'victory', 'death', 'bossIntro',
   'confirm', 'pause', 'unpause', 'heal', 'heartUp', 'checkpoint', 'chest', 'bell', 'parry',
-  'enemyPop', 'gateOpen', 'dragonDie', 'doubleJump']);
+  'enemyPop', 'gateOpen', 'dragonDie', 'doubleJump', 'ticket', 'jackCrank', 'portalOpen']);
 
 function resume() {
   try {
@@ -1510,6 +1949,74 @@ const LOOPS = {
       for (const [m, det] of [[38, -10], [38, 7], [38, 15], [45, -6], [45, 9], [50, -4], [50, 12], [26, 0]]) {
         buzz(v, mtof(m), t, null, g, rnd(4, 5.5), 0.007).detune.value = det;
       }
+    },
+  },
+  // Carousel works (the music is separate): generated clank/creak/steam
+  // cycle, plus a live hiss and the low rumble of the turning platform.
+  carousel: {
+    level: 0.38, verb: 0.25,
+    build(v, out) {
+      const t = v.t;
+      if (!S.buf.carousel) S.buf.carousel = makeCarousel(S.ctx);
+      v.buffer(S.buf.carousel, t, null, v.filter('lowpass', 5000, 0.7, v.gain(1, out)), 1);
+      const sg = v.gain(0.025, out);
+      v.noise('white', t, null, v.filter('highpass', 4500, 0.7, sg));
+      wander(v, 0.4, 0.015, sg.gain, t, null);
+      const rg = v.gain(0.3, out);
+      v.noise('brown', t, null, v.filter('lowpass', 110, 0.7, rg));
+      lfo(v, 1 / 1.5, 0.12, rg.gain, t, null);
+    },
+  },
+  // Starlit nebula air: high, glassy and slow (wind sits low and gusty).
+  nebula: {
+    level: 0.75, verb: 0.5,
+    build(v, out) {
+      const t = v.t;
+      for (const side of [-0.6, 0.6]) {
+        const pan = v.pan(side, out);
+        const g = v.gain(0.22, pan), bp = v.filter('bandpass', 2600, 0.7, g);
+        v.noise('pink', t, null, bp);
+        wander(v, 0.08, 900, bp.frequency, t, null);
+        wander(v, 0.06, 0.16, g.gain, t, null);            // slow swells
+        const wg = v.gain(0.02, pan), wbp = v.filter('bandpass', 4200, 18, wg);
+        v.noise('white', t, null, wbp);                     // glassy whistle
+        wander(v, 0.1, 1200, wbp.frequency, t, null);
+        wander(v, 0.15, 0.018, wg.gain, t, null);
+      }
+      const sg = v.gain(0.006, out);                        // drifting star tones
+      for (const [f, d] of [[2350, 1.003], [3140, 1.004]]) {
+        const a = v.osc('sine', f, t, null, sg), b = v.osc('sine', f * d, t, null, sg);
+        const w = wander(v, 0.05, f * 0.03, a.frequency, t, null);
+        w.connect(b.frequency);
+      }
+      lfo(v, 0.07, 0.005, sg.gain, t, null);
+    },
+  },
+  // Barely-there ghost fair: a far murmur, and now and then (slow random
+  // gates) a distant laugh on the left or a slide whistle on the right.
+  ghostCrowd: {
+    level: 0.8, verb: 0.6,
+    build(v, out) {
+      const t = v.t, far = v.filter('lowpass', 1400, 0.6, out);
+      const bank = formants(v, 'o', far, 1, 0.6);
+      wander(v, 0.6, 180, bank.fs[0].frequency, t, null);
+      wander(v, 0.5, 400, bank.fs[1].frequency, t, null);
+      const syl = v.gain(0.5, bank.inp);
+      wander(v, 7, 0.5, syl.gain, t, null);                 // babble
+      const g = v.gain(0.025, syl);
+      for (const f of [118, 146, 175, 210]) {
+        wander(v, 1.5, f * 0.12, buzz(v, f, t, null, g, rnd(4, 6), 0.01).frequency, t, null);
+      }
+      const lg = v.gain(0, v.pan(-0.5, far));
+      v.noise('white', t, null, v.shaper(gateCurve(0.6), lg.gain), 0.15 / S.ctx.sampleRate);
+      const lb = formants(v, 'a', lg, 1.15, 1), ha = v.gain(0.5, lb.inp);
+      lfo(v, 6.5, -0.5, ha.gain, t, null, 'sawtooth');      // ha-ha-ha
+      wander(v, 0.8, 60, buzz(v, 300, t, null, v.gain(0.05, ha), 6, 0.02).frequency, t, null);
+      const wg = v.gain(0, v.pan(0.55, v.filter('lowpass', 3000, 0.7, out)));
+      v.noise('white', t, null, v.shaper(gateCurve(0.72), wg.gain), 0.09 / S.ctx.sampleRate);
+      const wh = v.osc('sine', 1500, t, null, v.gain(0.02, wg));
+      wander(v, 0.7, 350, wh.frequency, t, null);
+      lfo(v, 6, 18, wh.frequency, t, null);
     },
   },
 };
@@ -1653,7 +2160,7 @@ function tfilter(tr, type, f, Q, to) {
 const MIX = {
   harpsi: [0.75, 0.3], celesta: [0.9, 0.55], pizz: [0.9, 0.3], organ: [0.8, 0.6], tbell: [0.7, 0.9],
   bigbell: [0.6, 1.0], timp: [0.85, 0.4], brass: [0.75, 0.45], bass: [0.9, 0.1], perc: [0.7, 0.18],
-  choir: [1, 0.7],
+  choir: [1, 0.7], calliope: [0.8, 0.45],
 };
 function tbus(tr, key) {
   let b = tr.buses[key];
@@ -1684,7 +2191,7 @@ function morph(tr, vowel, t, dur) {
 }
 
 const INST = {
-  harpsi, celesta, pizz, tbell, timp, bass, perc, organ, brass,
+  harpsi, celesta, pizz, tbell, timp, bass, perc, organ, brass, calliope,
   bigbell: (v, to, t, m, vel = 1, len = 6) => bigBell(v, to, t, mtof(m), 0.12 * vel, len),
 };
 // One instrument event as its own short-lived Voice on the track bus.
@@ -2036,6 +2543,119 @@ const TRACKS = {
         if (!B) N(tr, 'organ', t, [e.m], len - 0.03, 0.8, 'reed');
         else N(tr, 'brass', t, [e.m - 12, e.m], len - 0.03, 0.9, 0.04);
         if (pass % 2 === 1) sing(tr, t, [e.m], len, { att: 0.05, rel: 0.4, level: 0.04 });
+      }
+    },
+  },
+
+  // Midnight Carnival: G minor waltz, 3/4, 100 bpm. A lonely band organ: bass
+  // pipe "oom" (root / fifth), flute-organ "pah-pah", wobbly calliope tune,
+  // music-box countermelody (B, and every odd pass), faint "oo" choir.
+  // Odd passes: calliope in thirds, pizzicato on the pahs, soft kick + shaker.
+  // A: Gm Gm D7 D7 Cm Gm/Bb Am7b5 D7 | B: Eb Bb/D Cm Gm Eb C#dim7 Gm/D D7
+  carnival: {
+    bpm: 100, spb: 2, bpb: 6, bars: 16, gain: 1.2,
+    chords: ['Gm', 'Gm', 'D7', 'D7', 'Cm', 'Gm/Bb', 'Am7b5', 'D7', 'Eb', 'Bb/D', 'Cm', 'Gm', 'Eb', 'C#dim7', 'Gm/D', 'D7'],
+    seqs: {
+      mel: `D5 - - - G5 A5 | Bb5 - - - A5 G5 | F#5 - - - G5 A5 | C6 - - - A5 F#5 |
+            G5 - - - F5 Eb5 | D5 - - - Bb4 G4 | C5 - - - Eb5 G5 | F#5 - - - . . |
+            G5 - - - Bb5 Eb6 | D6 - - - Bb5 F5 | Eb5 - - - G5 C6 | Bb5 - - - - D5 |
+            Eb6 - - - D6 C6 | Bb5 - - - G5 E5 | D5 - - - G5 Bb5 | A5 - - - C6 F#5`,
+      glk: `. . Bb6 G6 . . | . . D6 - . . | . . C7 A6 . . | . . F#6 - . . |
+            . . G6 Eb6 . . | . . D6 - . . | . . Eb6 C6 . . | . . A6 F#6 D6 . |
+            . . Bb6 G6 . . | . . F6 - . . | . . G6 Eb6 . . | . . D6 - . . |
+            . . G6 Bb6 . . | . . E6 C#6 . . | . . Bb6 G6 . . | . . C7 A6 F#6 .`,
+    },
+    setup(tr) { makeChoir(tr, 'u', 1); },
+    step(tr, P, t) {
+      const { s, bar, b, pass } = P, sd = tr.sd, ch = this.chords[bar], odd = pass % 2 === 1, B = bar >= 8;
+      if (b === 0) {
+        const lo = this.chords[(bar + 15) % 16] === ch ? rootOf(ch, 31) + chord(ch).iv[2] : bassOf(ch, 36);
+        N(tr, 'bass', t, lo, sd * 1.8, 0.85);
+        N(tr, 'organ', t, [lo + 12], sd * 1.5, 0.6, 'flute');
+        if (bar % 2 === 0) sing(tr, t, voicing(ch, 62, 3), 12 * sd - 0.1, { att: 1.2, rel: 2, level: B || odd ? 0.018 : 0.012 });
+        if (bar % 8 === 0) N(tr, 'tbell', t, rootOf(ch, 67), 0.35, 3.5);
+        if (odd) N(tr, 'perc', t, 'kick', 0.35);
+      }
+      if (b === 2 || b === 4) {
+        N(tr, 'organ', t, voicing(ch, 55, 3), sd * 0.7, b === 2 ? 0.55 : 0.45, 'flute');
+        if (odd) {
+          N(tr, 'pizz', t, voicing(ch, 62, 1)[0], 0.35);
+          N(tr, 'perc', t, 'shaker', 0.3);
+        }
+      }
+      const e = ev(tr, 'mel', s);
+      if (e) {
+        const len = e.len * sd;
+        N(tr, 'calliope', t + rnd(0, 0.01), e.m, e.len >= 4 ? 0.95 : 0.8, len * 0.92);
+        if (odd && e.len >= 4) {
+          const h = voicing(ch, e.m - 6, 3).filter((x) => x < e.m).pop();
+          if (h) N(tr, 'calliope', t + 0.006, h, 0.5, len * 0.9);
+        }
+      }
+      const g = ev(tr, 'glk', s);
+      if (g && (B || odd)) N(tr, 'celesta', t, g.m, b === 2 ? 0.55 : 0.4, 1.4);
+    },
+  },
+
+  // The Marionette Queen: F minor danse macabre, 3/4, 168 bpm. Kick + snare
+  // "oom-pah-pah", timpani root/fifth, pizz + bass; A: harpsichord riff with
+  // calliope on the accents over reed stabs; B: calliope theme over brass stabs
+  // and tambourine; C: the carnival waltz, quoted a tone down, with choir.
+  // Choir swell + crash on every section change, snare fill closing each.
+  // A: Fm Fm Db C Fm Fm Gb C7 | B: Bbm Fm Db C Bbm Fm/Ab Gb C7
+  // C: Fm Fm C7 C7 Bbm Fm/Ab Gm7b5 C7
+  bigtop: {
+    bpm: 168, spb: 2, bpb: 6, bars: 24, gain: 0.65,
+    chords: ['Fm', 'Fm', 'Db', 'C', 'Fm', 'Fm', 'Gb', 'C7', 'Bbm', 'Fm', 'Db', 'C', 'Bbm', 'Fm/Ab', 'Gb', 'C7',
+      'Fm', 'Fm', 'C7', 'C7', 'Bbm', 'Fm/Ab', 'Gm7b5', 'C7'],
+    seqs: {
+      mel: `C5! Db5 C5 F5! E5 F5 | Ab5! G5 F5 C5! - Ab4 | Db5! Eb5 Db5 F5! E5 F5 | G5! F5 E5 C5! - - |
+            C5! Db5 C5 F5! E5 F5 | Ab5! G5 Ab5 C6! - Ab5 | Gb5! - Bb5 Db6! - Bb5 | E5! G5 Bb5 Db6! C6 Bb5 |
+            Db6! - - - C6 Bb5 | C6! - - - Ab5 F5 | Ab5! - - - F5 Db5 | E5! - G5 - C6 - |
+            Db6! - - - F6 Db6 | C6! - - - Ab5 C6 | Bb5! - Db6 - Gb5 - | C6! - Bb5 - G5 E5 |
+            C5 - - - F5 G5 | Ab5 - - - G5 F5 | E5 - - - F5 G5 | Bb5 - - - G5 E5 |
+            F5 - - - Eb5 Db5 | C5 - - - Ab4 F4 | Bb4 - - - Db5 F5 | E5 - - - . .`,
+    },
+    setup(tr) { makeChoir(tr, 'a', 1.05); },
+    step(tr, P, t) {
+      const { s, bar, b, pass } = P, sd = tr.sd, ch = this.chords[bar], r = rootOf(ch, 36);
+      const sec = bar >> 3, odd = pass % 2 === 1, lo = bassOf(ch, 33);
+      if (b === 0) {
+        N(tr, 'perc', t, 'kick', 1);
+        N(tr, 'pizz', t, lo + 12, 1);
+        N(tr, 'bass', t, lo, sd * 1.8, 0.85);
+        N(tr, 'timp', t, bar % 2 ? (r + 7 > 45 ? r - 5 : r + 7) : r, 0.8, 0.8);
+        if (bar % 8 === 0) {
+          N(tr, 'perc', t, 'crash', 0.8);
+          morph(tr, ['a', 'o', 'u'][sec], t, 0.5);
+          sing(tr, t, voicing(ch, 57, 4), 12 * sd - 0.1, { att: 0.3, rel: 1.2, level: 0.05 });
+        }
+        if (sec === 0 && bar >= 6) N(tr, 'brass', t, voicing(ch, 50, 3), 0.25, 0.9, 0.02);
+        if (sec === 2) N(tr, 'organ', t, [r, ...voicing(ch, 53, 3)], 6 * sd - 0.05, 0.4, 'principal');
+      }
+      if (b === 2 || b === 4) {
+        N(tr, 'perc', t, 'snare', sec === 1 ? 0.55 : 0.38);
+        if (sec === 0) N(tr, 'organ', t, voicing(ch, 53, 3), sd * 0.7, 0.75, 'reed');
+        else if (sec === 1) N(tr, 'brass', t, voicing(ch, 50, 3), 0.1, b === 2 ? 0.9 : 0.75, 0.012);
+        else N(tr, 'organ', t, voicing(ch, 55, 3), sd * 0.7, 0.55, 'flute');
+      }
+      if (sec === 1 || (odd && sec === 0)) N(tr, 'perc', t, 'tamb', b % 2 ? 0.25 : 0.45);
+      if (bar % 8 === 7 && b >= 3) N(tr, 'perc', t, 'snare', 0.35 + (b - 3) * 0.2);
+      const e = ev(tr, 'mel', s);
+      if (e) {
+        const len = e.len * sd;
+        if (sec === 0) {
+          N(tr, 'harpsi', t, e.m, e.acc ? 1 : 0.7, len);
+          if (e.acc || odd) N(tr, 'calliope', t, e.m, e.acc ? 0.75 : 0.5, len * 0.85);
+        } else if (sec === 1) {
+          N(tr, 'calliope', t, e.m, 1, len * 0.92);
+          N(tr, 'harpsi', t, e.m - 12, 0.6, len);
+          if (odd) N(tr, 'brass', t, [e.m - 12], len - 0.03, 0.7, 0.04);
+        } else {
+          N(tr, 'calliope', t, e.m, 0.9, len * 0.92);
+          if (e.len >= 4) sing(tr, t, [e.m], len, { att: 0.06, rel: 0.4, level: 0.04 });
+          if (odd) N(tr, 'celesta', t, e.m + 12, 0.45, 0.8);
+        }
       }
     },
   },

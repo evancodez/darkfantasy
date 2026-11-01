@@ -450,4 +450,4 @@ export function bakeTextures() {
 }
 
 // re-exported for other modules that paint at runtime
-export { hash, fbm, vnoise, pal, P, hex, bayer };
+export { hash, fbm, vnoise, pal, P, hex, bayer, make, ridge, wrap, withA, mul, clamp01, marble, blocks };

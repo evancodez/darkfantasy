@@ -70,6 +70,19 @@ const PLUNGE = {
   shoulderL: [-0.65, 0, -0.2], elbowL: [-0.2, 0, 0],
   legL: [-0.9, 0, 0.12], kneeL: [1.4, 0, 0], legR: [-0.8, 0, -0.12], kneeR: [1.4, 0, 0],
 };
+// landing absorb and a heels-in skid when you reverse at speed
+const LAND = {
+  spine: [0.42, 0, 0], head: [-0.22, 0, 0],
+  legL: [-0.75, 0, 0.14], kneeL: [1.35, 0, 0], footL: [-0.55, 0, 0],
+  legR: [-0.55, 0, -0.14], kneeR: [1.15, 0, 0], footR: [-0.5, 0, 0],
+  shoulderL: [-0.5, 0, 0.6], elbowL: [-0.5, 0, 0], shoulderR: [-0.45, 0, -0.6], elbowR: [-0.5, 0, 0],
+};
+const SKID = {
+  spine: [-0.28, 0, 0], head: [0.12, 0, 0],
+  legL: [-0.8, 0, 0.12], kneeL: [0.3, 0, 0], footL: [-0.35, 0, 0],
+  legR: [0.35, 0, -0.12], kneeR: [0.9, 0, 0],
+  shoulderL: [-0.7, 0, 0.85], elbowL: [-0.4, 0, 0], shoulderR: [-0.6, 0, -0.85], elbowR: [-0.4, 0, 0],
+};
 const VICTORY = {
   spine: [-0.1, 0, 0], head: [-0.3, 0, 0],
   shoulderR: [-2.9, 0, -0.15], elbowR: [0, 0, 0], handR: [1.33, 0, 0],
@@ -92,13 +105,15 @@ export const ATTACKS = {
 // ----------------------------------------------------------------- model
 export function buildHero() {
   const m = {
-    armor: retroMat({ map: T.metal, chrome: 0.85, env: T.silver, color: 0xe8ecff, spec: 0.6, shine: 30, rim: 0.35, emit: 0.18 }),
-    dark: retroMat({ map: T.iron, spec: 0.3, shine: 12, rim: 0.35, emit: 0.1 }),
-    red: retroMat({ map: T.robe, rim: 0.4, spec: 0.1, side: THREE.DoubleSide, emit: 0.2 }),
-    gold: retroMat({ map: T.gold, chrome: 0.75, env: T.goldEnv, spec: 0.7, rim: 0.3, emit: 0.2 }),
+    // brushed steel plate (matte, soft highlight); only the helm is polished chrome
+    armor: retroMat({ map: T.metal, chrome: 0.62, env: T.silver, color: 0xd4daf8, spec: 0.3, shine: 12, rim: 0.15, emit: 0.1, edge: 0.4 }),
+    helm: retroMat({ map: T.metal, chrome: 0.82, env: T.silver, color: 0xe0e6ff, spec: 0.45, shine: 24, rim: 0.15, emit: 0.12, edge: 0.3 }),
+    dark: retroMat({ map: T.iron, spec: 0.15, shine: 10, rim: 0.2, emit: 0.06, edge: 0.3 }),
+    red: retroMat({ map: T.robe, rim: 0.25, spec: 0.05, side: THREE.DoubleSide, emit: 0.14, edge: 0.3 }),
+    gold: retroMat({ map: T.gold, chrome: 0.55, env: T.goldEnv, spec: 0.35, rim: 0.15, emit: 0.14, edge: 0.3 }),
     eye: retroMat({ color: 0xffe880, emit: 1, fog: 0.4 }),
     blade: retroMat({ map: T.runes, chrome: 0.3, env: T.chrome, emit: 0.55, spec: 1.2, shine: 40 }),
-    shield: retroMat({ map: T.shield, spec: 0.6, shine: 20, rim: 0.35, emit: 0.2 }),
+    shield: retroMat({ map: T.shield, spec: 0.3, shine: 14, rim: 0.2, emit: 0.16, edge: 0.25 }),
     flame: retroMat({ color: 0x9ad6ff, emit: 1, additive: true, opacity: 0.95, fog: 0.3 }),
     flameCore: retroMat({ color: 0xffffff, emit: 1, fog: 0.3 }),
   };
@@ -124,7 +139,7 @@ export function buildHero() {
   P('hips', box(0.3, 0.26, 0.03, { s: 3 }), m.red, [0, -0.11, -0.15], [0.1, 0, 0]);
   // head: round helm, visor slot, glowing eyes, gorget, candle
   P('head', cyl(0.2, 0.25, 0.09, 10, { s: 4 }), m.gold, [0, 0.01, 0]);
-  P('head', sphere(0.3, 12, 9), m.armor, [0, 0.24, 0.0], [0, 0, 0], [1, 1.04, 1.08]);
+  P('head', sphere(0.3, 12, 9), m.helm, [0, 0.24, 0.0], [0, 0, 0], [1, 1.04, 1.08]);
   P('head', box(0.4, 0.075, 0.12, { s: 6 }), m.dark, [0, 0.21, 0.27]);
   for (const s of [-1, 1]) P('head', box(0.08, 0.04, 0.03), m.eye, [s * 0.08, 0.212, 0.33]);
   P('head', box(0.05, 0.1, 0.5, { s: 4 }), m.gold, [0, 0.5, -0.02]);
@@ -165,7 +180,7 @@ export function buildHero() {
   rig.part(shield, sphere(0.06, 6, 5), m.gold, [0, 0, 0.045]);
 
   // ------------------------------------------------------------ animation
-  const st = { t: 0, phase: 0, squash: 0, flip: 0, spin: 0, guardW: 0, cape: [0.15, 0.08, 0.06] };
+  const st = { t: 0, phase: 0, squash: 0, flip: 0, spin: 0, guardW: 0, cape: [0.15, 0.08, 0.06], land: 0, skid: 0, lean: 0, idleT: 0 };
   const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _p = new THREE.Vector3(), _m = new THREE.Matrix4();
   const guardQ = new THREE.Quaternion(), guardP = new THREE.Vector3(0.05, 0.98, 0.42);
 
@@ -184,15 +199,27 @@ export function buildHero() {
       const a = Math.sin(st.phase), c = Math.cos(st.phase);
       const breathe = Math.sin(st.t * 2.2) * 0.03;
       const idle = mixPose(IDLE, { spine: [0.06 + breathe, 0, 0], shoulderL: [-0.12 - breathe, 0, 0.2], shoulderR: [-0.25 - breathe, 0, -0.18] }, 1);
+      // idle for a while: glance around
+      st.idleT = sp < 0.3 && !s.action && !(s.guard > 0) ? st.idleT + dt : 0;
+      const look = THREE.MathUtils.smoothstep(st.idleT, 3, 4.5), lt = st.idleT - 3;
+      idle.head = [-0.04 + Math.sin(lt * 0.9) * 0.08 * look, Math.sin(lt * 0.55) * 0.6 * look, 0];
+      idle.spine[1] = Math.sin(lt * 0.55 - 0.6) * 0.12 * look;
+      idle.hips = [0, 0, Math.sin(lt * 0.4) * 0.04 * look];
+      // run: hips roll with the stride, elbows pump, the sword trails low behind
       const runP = {
-        hips: [0, -a * 0.18, 0], spine: [0.22, a * 0.22, 0], head: [-0.15, -a * 0.15, 0],
-        legL: [-a * 0.95, 0, 0.04], kneeL: [0.25 + Math.max(0, -c) * 1.3, 0, 0], footL: [Math.max(0, a) * 0.3, 0, 0],
-        legR: [a * 0.95, 0, -0.04], kneeR: [0.25 + Math.max(0, c) * 1.3, 0, 0], footR: [Math.max(0, -a) * 0.3, 0, 0],
-        shoulderL: [a * 0.75 - 0.15, 0, 0.25], elbowL: [-0.7, 0, 0],
-        shoulderR: [-a * 0.6 - 0.1, 0, -0.25], elbowR: [-0.8, 0, 0], handR: [1.6, 0, 0],
+        hips: [0, -a * 0.2, a * 0.06], spine: [0.24, a * 0.24, -a * 0.04], head: [-0.17, -a * 0.18, a * 0.04],
+        legL: [-a * 0.98, 0, 0.04], kneeL: [0.25 + Math.max(0, -c) * 1.4, 0, 0], footL: [Math.max(0, a) * 0.35, 0, 0],
+        legR: [a * 0.98, 0, -0.04], kneeR: [0.25 + Math.max(0, c) * 1.4, 0, 0], footR: [Math.max(0, -a) * 0.35, 0, 0],
+        shoulderL: [a * 0.8 - 0.15, 0, 0.25], elbowL: [-0.75 - Math.max(0, a) * 0.5, 0, 0],
+        shoulderR: [-a * 0.55 + 0.25, 0, -0.3], elbowR: [-0.55, 0, 0], handR: [1.95, 0, 0],
       };
       pose = mixPose(idle, runP, run);
     }
+    // landing: knees absorb the drop; skidding: dig the heels in
+    st.land = Math.max(st.land * Math.exp(-dt * 7), s.landed ? Math.min(1, 0.35 + s.landed / 22) : 0);
+    st.skid += ((s.skid && s.grounded ? 1 : 0) - st.skid) * (1 - Math.exp(-dt * 14));
+    if (st.land > 0.02 && s.grounded && !s.dead) pose = mixPose(pose, LAND, st.land * (s.action ? 0.4 : 1));
+    if (st.skid > 0.02) pose = mixPose(pose, SKID, st.skid);
     if (s.guard > 0) pose = mixPose(pose, GUARD, s.guard);
     st.guardW += ((s.guard > 0 ? 1 : 0) - st.guardW) * (1 - Math.exp(-dt * 22));
 
@@ -215,12 +242,17 @@ export function buildHero() {
     const bob = s.grounded && !act ? Math.abs(Math.cos(st.phase)) * 0.07 * run : 0;
     rig.body.scale.set(1 + sq * 0.5, 1 - sq, 1 + sq * 0.5);
     let crouch = act === 'plungeLand' ? -0.28 : (s.guard > 0 ? -0.07 : 0);
+    if (s.grounded) crouch -= st.land * 0.12 + st.skid * 0.05;
     if (s.dead) crouch = -0.45;
     rig.body.position.y = 0.76 - sq * 0.5 + bob + crouch;
     st.flip = flipTarget ? flipTarget : st.flip + (0 - st.flip) * (1 - Math.exp(-dt * 30));
     if (!act || (act !== 'flip' && act !== 'plunge')) st.flip = 0;
     rig.body.rotation.x = st.flip + (s.dead ? -1.35 : 0);
     rig.body.rotation.y = spinTarget;
+    // bank into turns (positive yaw rate turns toward local +x)
+    const lean = s.dead ? 0 : THREE.MathUtils.clamp(-(s.turn || 0) * 0.05, -0.3, 0.3) * run * (s.grounded ? 1 : 0.4);
+    st.lean += (lean - st.lean) * (1 - Math.exp(-dt * 8));
+    rig.body.rotation.z = st.lean;
 
     // cape: trails with speed, lifts while falling, flutters
     const fl = Math.sin(st.t * 13) * 0.06 * (0.3 + run) + Math.sin(st.t * 7.7) * 0.03;

@@ -7,7 +7,7 @@ import { T } from '../core/tex.js';
 export const GALAXY_DIR = new THREE.Vector3(0, 0.42, -1).normalize();
 export const MOON_DIR = new THREE.Vector3(-0.85, 0.42, 0.3).normalize();
 
-const NOISE = /* glsl */`
+export const NOISE = /* glsl */`
 float h3(vec3 p){ p = fract(p * .3183099 + .1); p *= 17.; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
 float n3(vec3 x){ vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f);
   return mix(mix(mix(h3(i), h3(i + vec3(1,0,0)), f.x), mix(h3(i + vec3(0,1,0)), h3(i + vec3(1,1,0)), f.x), f.y),
@@ -50,7 +50,7 @@ function dome(fogColor) {
   return m;
 }
 
-function starField(R, rand) {
+export function starField(R, rand) {
   // tiny 1–2 px stars
   const N = 2600, pos = new Float32Array(N * 3), col = new Float32Array(N * 3), sz = new Float32Array(N), ph = new Float32Array(N);
   for (let i = 0; i < N; i++) {
@@ -77,7 +77,7 @@ function starField(R, rand) {
   return p;
 }
 
-function flareStars(R, rand, count, minS, maxS) {
+export function flareStars(R, rand, count, minS, maxS) {
   const pos = new Float32Array(count * 3), col = new Float32Array(count * 3), sz = new Float32Array(count), ph = new Float32Array(count);
   for (let i = 0; i < count; i++) {
     let v; do { v = new THREE.Vector3(rand() * 2 - 1, rand() * 0.95 + 0.05, rand() * 2 - 1); } while (v.lengthSq() > 1 || v.lengthSq() < 0.05);
@@ -101,7 +101,7 @@ function flareStars(R, rand, count, minS, maxS) {
   return p;
 }
 
-function galaxy(size, opts) {
+export function galaxy(size, opts) {
   const mat = new THREE.ShaderMaterial({
     depthWrite: false, transparent: true, blending: THREE.AdditiveBlending,
     uniforms: {

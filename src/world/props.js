@@ -39,6 +39,7 @@ function potGeo() {
 }
 
 export const PM = {};
+export { Prop, Mover, put, starGeo };
 function mats() {
   if (PM.gold) return;
   Object.assign(PM, {
@@ -187,10 +188,10 @@ class Sigil extends Prop {
 
 // kinematic platform following a function of time: path(t) -> {pos, yaw}
 class Mover extends Prop {
-  constructor(game, mesh, half, path, parent) {
+  constructor(game, mesh, half, path, parent, opts) {
     super(game); this.mesh = mesh; this.path = path; this.t = 0; parent.add(mesh);
     const st = path(0); mesh.position.copy(st.pos); mesh.rotation.y = st.yaw || 0;
-    this.pf = addPlatform(half, mesh);
+    this.pf = addPlatform(half, mesh, opts);
     this.pf.yawDelta = 0; this.lastYaw = st.yaw || 0;
     this.center = new THREE.Vector3();
     const self = this;
@@ -384,7 +385,7 @@ export class Props {
   }
   checkpoint(pos, yaw, name, parent = this.root) { return this.add(new Checkpoint(this.game, pos, yaw, name, parent)); }
   sigil(pos, parent, onGet) { return this.add(new Sigil(this.game, pos, parent || this.root, onGet)); }
-  mover(mesh, half, path, parent = this.root) { return this.add(new Mover(this.game, mesh, half, path, parent)); }
+  mover(mesh, half, path, parent = this.root, opts) { return this.add(new Mover(this.game, mesh, half, path, parent, opts)); }
   crumble(pos, size, parent = this.root) { return this.add(new Crumble(this.game, pos, size, parent)); }
   bouncer(pos, power = 21, parent = this.root) { return this.add(new Bouncer(this.game, pos, power, parent)); }
   pendulum(pivot, len, yaw, parent = this.root, o) { return this.add(new Pendulum(this.game, pivot, len, yaw, parent, o)); }
