@@ -1,9 +1,11 @@
 # Grimhold — the Candle Knight
 
 A late-90s style 3D action-platformer that runs in the browser — a haunted
-castle under a spiral galaxy, then a starlight carnival on a shard of the
-broken moon (Three.js + Rapier, no build step, no asset files — every texture,
-model, sound and song is generated in code).
+castle under a spiral galaxy and a starlight carnival on a shard of the broken
+moon (Book I), then the mirror-still dream of a sleeping god (Book II).
+Three.js + Rapier, no build step, no asset files — every texture, model, sound
+and song is generated in code. It deploys as a plain static site (Vercel,
+Netlify, GitHub Pages): the two libraries it needs are vendored in `vendor/`.
 
 ## Play
 
@@ -81,9 +83,37 @@ Three **Moon Tickets** open the Big Top:
    arms cut she hangs by her crown, dives at you and plants it in the floor.
    She sweeps an arm across the ring (jump it), spins, and drops tin soldiers in.
 
-**Chapter select** (title screen and pause menu) jumps straight to the Grounds,
-the Hall, the Spire, the Demon Gate, the Dragon, the Moon Carnival or the
-Puppet Queen.
+## Book II — The Mirror Sea
+
+The dream of a sleeping god: a perfectly still lagoon of mirror-glass (a real
+planar reflection — you walk on your own reflection) under a kaleidoscope sky,
+pouring off the edge of the world into a starry abyss. A black-hole sun, glass
+marble planets, islands hanging upside-down, chrome koi swimming through the
+air. Reached from the title screen, or onward from the Queen's defeat.
+Three **Dream Shards** wake the Dreamer:
+
+1. **The Glass Lagoon** — chrome monoliths, half-sunk moon arches whose
+   reflections close the circle, drifting lotus lanterns, bubbles to pop.
+   Eyemoths fold their wings and swoop (slash them in mid-air), your own dark
+   reflection climbs out of the mirror to duel you (parry it, or smash its
+   guard from above), and glass pufferfish swell up spiny and loose rings of
+   bubbles (jump them or parry them home).
+2. **The Jelly Reef** — bounce up a tower of giant jellyfish (hold jump as you
+   land to go higher) to a chrome coral crown.
+3. **The Sleeping Colossus** — a marble head the size of a hill. Climb its
+   hand, then a stair that builds itself out of thin air as you go, round and
+   round the head (spinning mandala discs, tiles that blink in and out, a
+   terrace where your reflection waits) to the lotus on its crown.
+4. **The Hanging Isle** — ride a waterfall that pours *upward*, then a glass
+   manta ray, to an island hanging over its own reflection; climb the lotus
+   pads round its pagoda.
+5. **Somnia, Mother of Moths** — the Dreamer opens its eyes, a rose-window
+   arena forms before its face and a pillar of light lifts you to it. Parry
+   her eye-orbs back to knock her out of the air, then cut the eyes on her
+   wings; jump her rolling dust rings, sidestep her swoop.
+
+**Chapter select** (title screen and pause menu) jumps straight to any chapter
+of either book.
 
 ## Code map
 
@@ -104,20 +134,30 @@ src/world/carnival/    the Midnight Carnival: assets.js (its textures, materials
                        and set pieces), sky.js (nebula, shattered moon, ringed
                        planet), carnival.js (layout, rides, high wire, Big Top,
                        tickets, cannon, zone)
+src/world/dream/       the Mirror Sea: assets.js (textures, materials, shaders,
+                       the colossus head, hands, lotuses, pagodas), sky.js
+                       (kaleidoscope dome, black-hole sun, marble planets),
+                       dream.js (lagoon, reef, stair, isle, arena, zone)
+src/core/mirror.js     planar mirror (the scene redrawn from under the water)
+src/core/input.js      keyboard, mouse and gamepad (standard mapping), rumble
 src/actors/            hero (rig + model), player controller, enemies, witch,
                        dragon, enemy models, fairfolk.js (imps, jacks, tin
-                       soldiers), queen.js (the Marionette Queen)
+                       soldiers), queen.js (the Marionette Queen),
+                       dreamfolk.js (eyemoths, mirror twins, glass puffers),
+                       somnia.js (Somnia, Mother of Moths)
 src/audio.js           all sound effects and music (Web Audio synthesis)
 src/ui/                HUD and screens
 test.html              character turntable: test.html?who=dragon&yaw=1&d=16
 test/bot.js            scripted bots used to verify the boss fight
 test/fairbot.js        input-only bots: carousel climb, wheel ride, high wire
                        and cannon, the Queen fight
+test/dreambot.js       input-only bots: jelly reef, dream-stair, hanging isle,
+                       the Somnia fight
 tools/shot.mjs         full-resolution screenshots from a headless Chrome
 ```
 
 Debug: `?autostart` skips the title, `?mute` silences it; `window.game` exposes
-`tp(x,y,z)`, `enterCastle()`, `enterFair()`, `startAt(chapter)`,
+`tp(x,y,z)`, `enterCastle()`, `enterFair()`, `enterDream()`, `startAt(chapter)`,
 `debugStep(frames, dt, keys)`.
 
 ## Trailer

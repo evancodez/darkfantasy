@@ -58,7 +58,23 @@ const TICKET = [
   'xyyyyyyyyyyyyx',
   'xxxxxxxxxxxxxx',
 ];
+// a Dream Shard: a rainbow prism
+const SHARD = [
+  '....x....',
+  '...xWx...',
+  '..xWcmx..',
+  '..xcmmx..',
+  '.xWcmmyx.',
+  '.xccmmyx.',
+  'xWccmyyyx',
+  'xcccmyyyx',
+  '.xccmyyx.',
+  '..xcmyx..',
+  '...xmx...',
+  '....x....',
+];
 const SPR = {
+  shard: sprite(SHARD, { x: '#2a1a6a', c: '#60f0ff', m: '#ff70e0', y: '#ffe070' }), shardE: sprite(SHARD, { x: '#3a3a6a', W: '#2a2a50', c: '#1c1a40', m: '#221a44', y: '#1a1638' }),
   heart: sprite(HEART), heartE: sprite(HEART, { r: C.e, R: C.E, w: C.e, x: '#4a2a5a' }),
   mote: sprite(MOTE), sigil: crescent(true), sigilE: crescent(false),
   ticket: sprite(TICKET, { x: '#8a4a08', r: '#c0206a' }), ticketE: sprite(TICKET, { x: '#3a2a4a', y: '#2a1c3a', Y: '#1a1028', W: '#4a3a5a', r: '#3a2a4a' }),
@@ -67,6 +83,7 @@ const SPR = {
 // chapter select: two books, each a row of buttons
 export const BOOKS = [
   { name: 'BOOK I · GRIMHOLD', ch: [['grounds', 'The Grounds'], ['hall', 'The Hall'], ['spire', 'The Spire'], ['gate', 'The Demon Gate'], ['dragon', 'The Dragon'], ['carnival', 'The Moon Carnival'], ['queen', 'The Puppet Queen']] },
+  { name: 'BOOK II · THE MIRROR SEA', ch: [['dream', 'The Glass Lagoon'], ['somnia', 'Mother of Moths']] },
 ];
 const chapterHTML = () => BOOKS.map(b => `<div class="chl">${b.name}</div>` + b.ch.map(([id, n], i) => `<button data-ch="${id}">${i + 1} · ${n}</button>`).join('')).join('');
 // control hints for keyboard + mouse and for a PS5 pad (any pad: same positions)
@@ -120,7 +137,9 @@ export class HUD {
       ${ctlHTML()}`);
     this.pauseS.addEventListener('click', (e) => { const ch = e.target.closest('[data-ch]')?.dataset.ch; if (ch) this.onChapter?.(ch); else if (!e.target.closest('.chapters')) this.onResume?.(); });
     this.deathS = el('div', 'screen death hidden', scr, '<div class="dtitle">Your Flame Goes Out</div><div class="dsub">…but a candle can be lit again</div>');
-    this.winS = el('div', 'screen win hidden', scr, '<div class="logo small">Victory</div><div class="tag">The Star-Eater is slain. Grimhold sleeps.</div><div class="stats"></div><div class="press">THANK YOU FOR PLAYING</div>');
+    this.winS = el('div', 'screen win hidden', scr, '<div class="logo small">Victory</div><div class="tag">The Star-Eater is slain. Grimhold sleeps.</div><div class="stats"></div><div class="chapters"><button class="next hidden"></button></div><div class="press">THANK YOU FOR PLAYING</div>');
+    this.nextBtn = this.winS.querySelector('.next');
+    this.nextBtn.addEventListener('click', () => this.onNext?.());
     this.lastCol = '';
     this.ready = false;
     this.lastHp = -1; this.lastMax = -1; this.lastMotes = -1; this.lastSig = -1;
@@ -155,7 +174,14 @@ export class HUD {
   show(on) { this.root.classList.toggle('hidden', !on); }
   pause(on) { this.pauseS.classList.toggle('hidden', !on); }
   death(on) { this.deathS.classList.toggle('hidden', !on); }
-  win(stats, tag) { this.winS.classList.remove('hidden'); this.winS.querySelector('.stats').innerHTML = stats; if (tag) this.winS.querySelector('.tag').textContent = tag; this.show(false); }
+  // the end of a book: stats, a line of epilogue, and (optionally) a way on to the next book
+  win(stats, tag, next = null) {
+    this.winS.classList.remove('hidden'); this.winS.querySelector('.stats').innerHTML = stats; if (tag) this.winS.querySelector('.tag').textContent = tag; this.show(false);
+    this.onNext = next?.go; this.nextBtn.classList.toggle('hidden', !next); this.nextBtn.classList.toggle('focus', !!next);
+    if (next) this.nextBtn.innerHTML = next.label;
+    this.winS.querySelector('.press').textContent = next ? '' : 'THANK YOU FOR PLAYING';
+  }
+  unwin() { this.winS.classList.add('hidden'); this.show(true); }
 
   area(name, sub = '') {
     this.areaBox.innerHTML = `<div class="aname">${name}</div>${sub ? `<div class="asub">${sub}</div>` : ''}`;
@@ -193,10 +219,12 @@ export class HUD {
       if (this.lastMotes >= 0) { this.moteN.parentElement.classList.remove('bump'); void this.moteN.offsetWidth; this.moteN.parentElement.classList.add('bump'); }
       this.lastMotes = g.motes;
     }
-    // three Moon Sigils on the grounds, three Moon Tickets at the carnival
-    const fair = g.zone === 'carnival', n = fair ? g.tickets || 0 : g.sigils, key = (fair ? 't' : 's') + n;
+    // three Moon Sigils on the grounds, three Moon Tickets at the carnival, three Dream Shards in the Mirror Sea
+    const kind = g.zone === 'carnival' ? 't' : g.zone === 'dream' ? 'd' : 's';
+    const n = kind === 't' ? g.tickets || 0 : kind === 'd' ? g.shards || 0 : g.sigils, key = kind + n;
     if (key !== this.lastCol) {
-      this.sigImgs.forEach((im, i) => { im.src = fair ? (i < n ? SPR.ticket : SPR.ticketE) : (i < n ? SPR.sigil : SPR.sigilE); im.classList.toggle('got', i < n); im.classList.toggle('tk', fair); });
+      const full = { t: SPR.ticket, d: SPR.shard, s: SPR.sigil }[kind], empty = { t: SPR.ticketE, d: SPR.shardE, s: SPR.sigilE }[kind];
+      this.sigImgs.forEach((im, i) => { im.src = i < n ? full : empty; im.classList.toggle('got', i < n); im.classList.toggle('tk', kind === 't'); im.classList.toggle('sh', kind === 'd'); });
       this.lastCol = key;
     }
   }

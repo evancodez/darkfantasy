@@ -90,3 +90,7 @@ body:not(.pad) .pad, body.pad .kbm { display: none !important; }
 .ps.x { color: #8fb8ff; } .ps.o { color: #ff7b8a; } .ps.s { color: #f3a0e0; } .ps.t { color: #56e0b0; }
 .ps.sh { border-radius: 5px; padding: 0 .35em; color: #e8e4ff; font-size: .72em; height: 1.55em; }
 .chapters button.focus { background: #2a1a70; color: #fff; border-color: #ffd040; outline: var(--px) solid #ffd040; outline-offset: 2px; }
+.sigils img.sh { width: calc(var(--px) * 9); height: calc(var(--px) * 12); align-self: center; }
+.sigils img.sh.got { filter: drop-shadow(0 0 6px #d0a0ff) drop-shadow(var(--px) var(--px) 0 rgba(0,0,0,.6)); }
+.win .chapters { margin: 24px 0 0; }
+.win .next { font-size: calc(var(--px) * 7); padding: 10px 22px; }

@@ -212,7 +212,9 @@ export class Player {
     // --- vertical
     if (this.grounded) { this.coyote = t.coyote; this.jumps = 0; this.airHits = 0; } else this.coyote -= dt;
     this.jumpBuf = jumpPressed ? t.buffer : this.jumpBuf - dt;
-    if (this.jumpBuf > 0 && ctrl && this.action !== 'plunge' && this.action !== 'plungeLand' && this.action !== 'hurt') {
+    // a spring (a jellyfish, say) just fired: don't let a jump pressed this instant override it
+    this.springT = Math.max(0, (this.springT || 0) - dt);
+    if (this.jumpBuf > 0 && ctrl && !this.springT && this.action !== 'plunge' && this.action !== 'plungeLand' && this.action !== 'hurt') {
       if (this.coyote > 0) {
         this.vel.y = t.jumpV; this.coyote = 0; this.jumpBuf = 0; this.grounded = false;
         // leaping off a moving platform carries its motion with you
@@ -242,12 +244,15 @@ export class Player {
     if (airAtk && this.vel.y < 0) { grav *= 0.3; this.vel.y = Math.max(this.vel.y, -5); }
     this.vel.y = Math.max(-t.maxFall - (this.action === 'plunge' ? 6 : 0) - (this.ballistic ? 60 : 0), this.vel.y - grav * dt);
 
-    // --- moving platforms: carry the rider exactly (slide + spin) ourselves
+    // --- moving platforms: carry the rider exactly (slide + spin) ourselves.
+    // A climbing platform can lose contact for a frame; keep carrying through
+    // such flickers (briefly, and never once you've jumped).
     let carried = false;
-    if (this.platform && this.grounded) {
-      const d = this.platform.carry ? this.platform.carry(this.pos) : this.platform.delta;
+    const ride = this.platform && this.grounded ? this.platform : (this.stickT > 0 && this.vel.y <= 0.5 ? this.stickPf : null);
+    if (ride) {
+      const d = ride.carry ? ride.carry(this.pos) : ride.delta;
       this.pos.add(d); this.char.teleport(this.pos); carried = true;
-      if (this.platform.yawDelta) { this.yaw += this.platform.yawDelta; this.cam.yaw += this.platform.yawDelta; if (this.prevYaw !== undefined) this.prevYaw += this.platform.yawDelta; }
+      if (ride.yawDelta) { this.yaw += ride.yawDelta; this.cam.yaw += ride.yawDelta; if (this.prevYaw !== undefined) this.prevYaw += ride.yawDelta; }
     }
 
     // --- collide & move
@@ -272,6 +277,9 @@ export class Player {
       this.platform = pg;
       if (this.vel.y < 0) this.vel.y = -1;
     } else this.platform = null;
+    if (this.grounded && this.platform) { this.stickPf = this.platform; this.stickT = 0.15; }
+    else if (this.vel.y > 0.5 || this.grounded) this.stickT = 0;
+    else this.stickT = (this.stickT || 0) - dt;
     // actual horizontal velocity after collision (stop sliding into walls)
     if (dt > 0 && r.wall) {
       // walls only ever slow you down (never let a push-out become speed)

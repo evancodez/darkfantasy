@@ -147,6 +147,22 @@ function gateCurve(th) {
   S.curves.set(key, c);
   return c;
 }
+// Shepard sweep: maps a -1..1 sawtooth phase (shifted by `off` cycles) to an
+// exponential lo..hi frequency ('f') or a sin^2 fade window ('a') that is
+// silent where the sweep wraps, so stacked layers rise forever.
+function shepCurve(off, kind, lo = 250, hi = 6000) {
+  const key = 's' + kind + off + ':' + lo + ':' + hi;
+  let c = S.curves.get(key);
+  if (c) return c;
+  const n = 1024;
+  c = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const u = (i / (n - 1) + off) % 1;
+    c[i] = kind === 'f' ? lo * Math.pow(hi / lo, u) : Math.pow(Math.sin(Math.PI * u), 2);
+  }
+  S.curves.set(key, c);
+  return c;
+}
 
 // ------------------------------------------------------------- buffers
 // White / pink / brown noise, 2 s each, with a crossfaded loop seam.
@@ -291,6 +307,50 @@ function makeCarousel(c) {
       const y = c1 * y1 + c2 * y2 + x;
       y2 = y1; y1 = y;
       return y * 0.01 * Math.sin(Math.PI * i / n);
+    });
+  }
+  return b;
+}
+
+// Mirror lagoon bed: a seamless 12 s stereo loop of far glass chimes in D
+// Lydian (now and then a pair), soft laps against the mirror and the odd
+// droplet (generated once, on first use).
+function makeLagoon(c) {
+  const sr = c.sampleRate, dur = 12, len = Math.floor(sr * dur), TAU = Math.PI * 2;
+  const b = c.createBuffer(2, len, sr), L = b.getChannelData(0), R = b.getChannelData(1);
+  const add = (ts, n, pan, fn) => {
+    const s = Math.floor(ts * sr), q = (clamp(pan, -1, 1) + 1) * Math.PI / 4, gl = Math.cos(q), gr = Math.sin(q);
+    for (let i = 0; i < n; i++) { const x = fn(i), j = (s + i) % len; L[j] += x * gl; R[j] += x * gr; }
+  };
+  const chime = (ts, m, a, d, pan) => {
+    const w = TAU * mtof(m) / sr, k = 1 / (d * sr), at = sr * 0.004;
+    add(ts, Math.floor(d * sr * 4.5), pan, (i) => a * Math.min(1, i / at) *
+      (Math.exp(-i * k) * (Math.sin(w * i) + 0.6 * Math.sin(w * 1.0035 * i)) + 0.3 * Math.exp(-i * k * 3.5) * Math.sin(w * 2.76 * i)));
+  };
+  const NOTES = [86, 88, 90, 92, 93, 97, 98, 100];
+  for (let n = 0; n < 4; n++) {
+    const ts = (n * dur) / 4 + rnd(0, 1.8), pan = rnd(-0.8, 0.8), a = rnd(0.1, 0.2), d = rnd(1.0, 2.0);
+    chime(ts, pick(NOTES), a, d, pan);
+    if (Math.random() < 0.4) chime(ts + rnd(0.15, 0.4), pick(NOTES), a * 0.6, d * 0.8, pan + rnd(-0.2, 0.2));
+  }
+  for (let n = 0; n < 10; n++) {                    // laps: dark band-limited noise swells
+    const A = rnd(0.12, 0.25) * sr, D = rnd(0.3, 0.6) * sr, a = rnd(0.25, 0.5);
+    const k1 = 1 - Math.exp(-TAU * rnd(600, 1000) / sr), k2 = 1 - Math.exp(-TAU * 200 / sr);
+    let l0 = 0, l1 = 0, l2 = 0;
+    add((n * dur) / 10 + rnd(0, 0.6), Math.floor(A + D * 5), rnd(-0.6, 0.6), (i) => {
+      l0 += k1 * ((Math.random() * 2 - 1) - l0);
+      l1 += k1 * (l0 - l1);
+      l2 += k2 * (l1 - l2);
+      return (l1 - l2 * 0.7) * a * (i < A ? i / A : Math.exp(-(i - A) / D));
+    });
+  }
+  for (let n = 0; n < 7; n++) {                     // droplets: tiny rising blips
+    const f0 = rnd(900, 2200), nn = Math.floor(sr * 0.045), a = rnd(0.03, 0.07);
+    let ph = 0;
+    add(rnd(0, dur), nn, rnd(-0.7, 0.7), (i) => {
+      const x = i / nn;
+      ph += (TAU * f0 * (1 + 1.2 * x)) / sr;
+      return Math.sin(ph) * Math.exp(-x * 5) * a * Math.min(1, i / (sr * 0.001));
     });
   }
   return b;
@@ -731,6 +791,149 @@ function calliope(v, to, t, m, vel = 1, len = 0.4) {
   ahr(g.gain, t, 0.02, 0.08 * vel, Math.max(L - 0.02, 0), 0.12);
 }
 
+// ------------------------------------------------- mirror sea instruments
+const LYD = [0, 2, 4, 6, 7, 9, 11];                // Lydian (the Mirror Sea sits in D: root 2)
+const DREAM = [0, 2, 4, 6, 7, 11];                 // D E F# G# A C#: glitter subset
+// Reversed envelope: swells exponentially to `peak` at t1, then cuts off.
+function rev(p, t0, t1, peak, cut = 0.03) {
+  p.setValueAtTime(E, t0);
+  p.exponentialRampToValueAtTime(pk(peak), Math.max(t1, t0 + 0.01));
+  p.linearRampToValueAtTime(0, Math.max(t1, t0 + 0.01) + cut);
+  return t1 + cut;
+}
+// Glass bell (Hz): a beating sine pair spread across the stereo field, an
+// inharmonic FM strike (ratio 3.5) and glassy partials at 2.76 / 5.4 / 8.9.
+function glassF(v, to, t, f, amp, dec, pan = 0, att = 0.002) {
+  const end = t + dec + 0.05, g = v.gain(0, to), P = pan ? v.pan(pan, to) : to;
+  const car = v.osc('sine', f, t, end, v.pan(clamp(pan - 0.35, -1, 1), g));
+  v.osc('sine', f * 1.0035, t, end, v.gain(0.7, v.pan(clamp(pan + 0.35, -1, 1), g)));
+  const mg = v.gain(0, car.frequency);
+  v.osc('sine', f * 3.5, t, t + 0.3, mg);
+  mg.gain.setValueAtTime(f * 0.8, t);
+  mg.gain.exponentialRampToValueAtTime(f * 0.004, t + 0.22);
+  ad(g.gain, t, att, amp, dec);
+  partials(v, P, t, f, [2.76, 5.4, 8.93], [amp * 0.3, amp * 0.14, amp * 0.06], [dec * 0.3, dec * 0.14, Math.min(dec * 0.06, 0.1)]);
+}
+function glass(v, to, t, m, vel = 1, len = 2, pan = 0) {
+  glassF(v, to, t, mtof(m), 0.1 * vel, clamp(len, 0.3, 5) * (m > 90 ? 0.75 : 1), pan);
+}
+// Tape pad: two detuned saws + a soft triangle octave per note through a
+// breathing lowpass. opt.rev swells up and cuts off, like a reversed chord.
+function wpad(v, to, t, notes, dur, vel = 1, opt = {}) {
+  const cut = opt.cut || 1300, g = v.gain(0, to), lp = v.filter('lowpass', cut, 0.7, g);
+  const rel = opt.rev ? 0.04 : opt.rel ?? 1.4, end = t + dur + rel + 0.05;
+  const lvl = (0.05 * vel) / Math.sqrt(notes.length), att = opt.att ?? Math.min(dur * 0.4, 1.5);
+  for (const m of notes) {
+    const f = mtof(m);
+    for (const dt of [-11, 9]) v.osc('sawtooth', f, t, end, lp).detune.value = dt + rnd(-2, 2);
+    v.osc('triangle', f * 2, t, end, v.gain(0.4, lp));
+  }
+  path(lp.frequency, t, [[0, cut * 0.55], [dur * 0.6, cut * 1.25], [dur + rel, cut * 0.7]]);
+  if (opt.rev) rev(g.gain, t, t + dur, lvl * 1.4, rel);
+  else ahr(g.gain, t, att, lvl, Math.max(dur - att, 0), rel);
+}
+// Soft sub-bass pulse: sine + a whisper of second harmonic.
+function sub(v, to, t, m, len = 0.6, vel = 1) {
+  const f = mtof(m), g = v.gain(0, to), end = t + len + 0.3;
+  v.osc('sine', f, t, end, g);
+  v.osc('sine', f * 2, t, end, v.gain(0.15, g));
+  ahr(g.gain, t, 0.05, 0.15 * vel, len * 0.3, len * 0.7 + 0.2);
+}
+// Hand percussion and brushes for the dream groove.
+function hand(v, to, t, kind, vel = 1) {
+  switch (kind) {
+    case 'dum':                                     // frame drum, palm in the middle
+      thump(v, v.filter('lowpass', 700, 0.7, to), t, 115, 72, 0.32, 0.42 * vel);
+      burst(v, to, t, 'pink', 'lowpass', 500, 0.8, 0.002, 0.1, 0.16 * vel);
+      break;
+    case 'tek':                                     // finger slap on the rim
+      burst(v, to, t, 'white', 'bandpass', 2400, 1.6, 0.0006, 0.045, 0.26 * vel);
+      thump(v, to, t, 380, 330, 0.05, 0.1 * vel, 'triangle');
+      break;
+    case 'brush':                                   // brush sweep
+      burst(v, to, t, 'white', 'bandpass', 3800, 0.8, 0.035, 0.12, 0.09 * vel);
+      break;
+    case 'shk':
+      burst(v, to, t, 'white', 'highpass', 7500, 0.8, 0.006, 0.035, 0.06 * vel);
+      break;
+    case 'tick':                                    // glass tick
+      ping(v, to, t, 4700, 0.03 * vel, 0.12);
+      break;
+    default: break;
+  }
+}
+// Reversed swell: rising air and glass partials that cut off at t + dur.
+function rswell(v, to, t, notes, dur, vel = 1) {
+  const end = t + dur, g = v.gain(0, to), bp = v.filter('bandpass', 1500, 0.8, g);
+  v.noise('white', t, end + 0.05, bp);
+  glide(bp.frequency, t, 900, 7000, dur);
+  rev(g.gain, t, end, 0.06 * vel);
+  if (!notes || !notes.length) return;
+  const tg = v.gain(0, to);
+  for (const m of notes) {
+    const f = mtof(m);
+    v.osc('sine', f, t, end + 0.05, tg);
+    v.osc('sine', f * 2.76, t, end + 0.05, v.gain(0.25, tg));
+  }
+  rev(tg.gain, t, end, (0.05 * vel) / Math.sqrt(notes.length));
+}
+// Ocarina-ish whistle: sine with a breathy edge, a scooped attack and
+// vibrato that blooms on long notes.
+function whistle(v, to, t, m, len = 0.5, vel = 1) {
+  const f = mtof(m), L = Math.max(len, 0.1), end = t + L + 0.35, g = v.gain(0, to);
+  const s = v.osc('sine', f, t, end, g), s2 = v.osc('triangle', f, t, end, v.gain(0.18, g));
+  for (const o of [s, s2]) glide(o.frequency, t, f * 0.97, f, 0.07);
+  const vg = v.gain(0, s.frequency);
+  vg.connect(s2.frequency);
+  v.osc('sine', 5.2, t, end, vg);
+  vg.gain.setValueAtTime(0, t);
+  vg.gain.linearRampToValueAtTime(f * 0.007, t + Math.min(L, 0.7));
+  ahr(g.gain, t, 0.05, 0.1 * vel, Math.max(L - 0.05, 0), 0.28);
+  const br = v.gain(0, to);
+  v.noise('pink', t, end, v.filter('bandpass', Math.min(f * 2, 8000), 1.5, br));
+  ahr(br.gain, t, 0.03, 0.03 * vel, L * 0.4, 0.2);
+}
+// Plucked synth bass: detuned saws + square sub through a resonant lowpass
+// that snaps shut. `bright` (~0.4..2) opens the filter.
+function arpb(v, to, t, m, len = 0.12, vel = 1, bright = 1) {
+  const f = mtof(m), g = v.gain(0, to), lp = v.filter('lowpass', 600, 3, g), end = t + len + 0.15;
+  for (const dt of [-7, 7]) v.osc('sawtooth', f, t, end, lp).detune.value = dt;
+  v.osc('square', f * 0.5, t, end, v.gain(0.45, lp));
+  path(lp.frequency, t, [[0, clamp(f * 10 * bright, 300, 6000)], [0.08 + 0.05 * bright, Math.max(f * 1.5, 150)]]);
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(pk(0.16 * vel), t + 0.004);
+  g.gain.exponentialRampToValueAtTime(pk(0.08 * vel), t + Math.max(len * 0.6, 0.05));
+  g.gain.exponentialRampToValueAtTime(E, end - 0.01);
+}
+// Glassy lead: FM sine (ratio 1: bright strike mellowing to a glassy core),
+// detuned triangle, slow-blooming vibrato, glass partials on the strike.
+function glead(v, to, t, m, len = 0.4, vel = 1) {
+  const f = mtof(m), L = Math.max(len, 0.08), end = t + L + 0.45, g = v.gain(0, to);
+  const a = v.osc('sine', f, t, end, g), b = v.osc('triangle', f, t, end, v.gain(0.25, g));
+  b.detune.value = 7;
+  const mg = v.gain(0, a.frequency);
+  v.osc('sine', f, t, end, mg);
+  mg.gain.setValueAtTime(f * 1.4 * vel, t);
+  mg.gain.exponentialRampToValueAtTime(f * 0.35, t + 0.25);
+  const vg = v.gain(0, a.frequency);
+  vg.connect(b.frequency);
+  v.osc('sine', 5.6, t, end, vg);
+  vg.gain.setValueAtTime(0, t);
+  vg.gain.linearRampToValueAtTime(f * 0.008, t + Math.min(L, 0.5) + 0.05);
+  ahr(g.gain, t, 0.008, 0.09 * vel, L, 0.4);
+  partials(v, to, t, f, [2.76, 5.4], [0.03 * vel, 0.012 * vel], [0.4, 0.15]);
+}
+// Swirling pad: detuned saw pairs through a resonant sweeping lowpass,
+// auto-panned around the head; dir (+1 / -1) sets the spin.
+function swirl(v, to, t, notes, dur, vel = 1, bright = 1, dir = 1) {
+  const end = t + dur + 0.6, pn = v.pan(0, to), g = v.gain(0, pn);
+  const lp = v.filter('lowpass', 700 * bright, 3, g);
+  for (const m of notes) for (const dt of [-12, 12]) v.osc('sawtooth', mtof(m), t, end, lp).detune.value = dt + rnd(-3, 3);
+  lfo(v, 0.23, 450 * bright, lp.frequency, t, end);
+  if (pn.pan) lfo(v, 0.42, 0.75 * dir, pn.pan, t, end);
+  ahr(g.gain, t, Math.min(0.3, dur * 0.3), (0.06 * vel) / Math.sqrt(notes.length), Math.max(dur - 0.3, 0), 0.5);
+}
+
 // =============================================================================
 // One-shot sound effects. Each receives a Voice with:
 //   v.t (start time), v.out (output gain node), v.p (pitch multiplier)
@@ -752,6 +955,40 @@ function blip(v, to, t, f, amp, dur, f1) {
   const g = v.gain(0, to), s = v.osc(wave('pulse'), f, t, t + dur + 0.05, v.filter('lowpass', 4500, 0.7, g));
   if (f1) glide(s.frequency, t, f, f1, dur * 0.8);
   ad(g.gain, t, 0.003, amp, dur);
+}
+// Bubble: a sine whose pitch flicks upward as it dies (rise < 1 sinks).
+function bloop(v, to, t, f, amp, dur = 0.06, rise = 1.8) {
+  const g = v.gain(0, to), s = v.osc('sine', f, t, t + dur + 0.03, g);
+  glide(s.frequency, t, f, f * rise, dur);
+  ad(g.gain, t, 0.002, amp, dur);
+}
+// Glitter of crystal pings snapped to the D Lydian subset; dir 1 climbs,
+// -1 falls, 0 scatters.
+function dsparkle(v, to, t, n, span, amp, lo = 86, hi = 102, dir = 0) {
+  for (let i = 0; i < n; i++) {
+    const tt = t + (span * i) / n + rnd(0, (span / n) * 0.6), x = dir > 0 ? i / n : dir < 0 ? 1 - i / n : Math.random();
+    const m = snapScale(lo + (hi - lo) * x + (dir ? rnd(-1.5, 1.5) : 0), DREAM, 2);
+    ping(v, v.pan(rnd(-0.7, 0.7), to), tt, mtof(m) * v.p, amp * rnd(0.6, 1), rnd(0.25, 0.5));
+  }
+}
+// Choral cry: detuned buzz pairs through a formant bank, every voice bent by
+// one pitch contour (shape = [[fraction of dur, ratio], ...]); vowels move
+// along vow = [[fraction, vowel], ...].
+function cry(v, to, t, notes, dur, opt = {}) {
+  const bank = formants(v, opt.vowel || 'u', to, opt.shift || 1, 1);
+  bank.inp.connect(v.filter('lowpass', 900, 0.7, v.gain(0.15, to)));
+  const g = v.gain(0, bank.inp), end = t + dur + 0.1, att = opt.att ?? 0.1, rel = opt.rel ?? 0.5;
+  ahr(g.gain, t, att, opt.level ?? 0.06, Math.max(dur - att - rel, 0), rel);
+  for (const m of notes) {
+    const f = mtof(m);
+    for (const dt of [-10, 10]) {
+      const o = buzz(v, f, t, end, g, opt.vib ?? 5.5, opt.vd ?? 0.01);
+      o.detune.value = dt + rnd(-4, 4);
+      if (opt.shape) path(o.frequency, t, opt.shape.map(([x, r]) => [x * dur, f * r]));
+    }
+  }
+  for (const [x, vw] of opt.vow || []) sayVowel(bank, vw, t + x * dur, dur * 0.2);
+  return bank;
 }
 
 const SFX = {
@@ -1724,6 +1961,504 @@ const SFX = {
     ping(v, o, t + 0.12, mtof(98 + k), 0.02, 0.4);
   },
 
+  // --------------------------------------------------------- the mirror sea
+  // Everything musical here lives in D Lydian (D E F# G# A B C#), the key of
+  // the 'dream' theme, so chimes and glitter land in tune over the music.
+  // Giant jellyfish trampoline: gelatinous thud, wet slap, a rubbery boing that
+  // rises with a decaying wobble, a glassy overtone riding it, a fizz of bubbles.
+  jellyBounce(v) {
+    const { t, out: o, p } = v, end = t + 0.9;
+    thump(v, v.filter('lowpass', 500, 0.7, o), t, 130 * p, 48, 0.22, 0.6);
+    const sl = burst(v, o, t, 'pink', 'bandpass', 500, 1.4, 0.004, 0.12, 0.35);
+    glide(sl.frequency, t, 350, 1600, 0.07);
+    const g = v.gain(0, o), lp = v.filter('lowpass', 1500, 2.5, g);
+    const s = v.osc('triangle', 95 * p, t, end, lp);
+    path(s.frequency, t, [[0, 90 * p], [0.15, 290 * p], [0.8, 370 * p]]);
+    const w = lfo(v, 13, 55 * p, s.frequency, t, end);                 // jelly wobble
+    w.g.gain.setValueAtTime(55 * p, t);
+    w.g.gain.exponentialRampToValueAtTime(2, t + 0.8);
+    ad(g.gain, t, 0.008, 0.32, 0.75);
+    const gg = v.gain(0, o), gs = v.osc('sine', 360 * p, t, end, gg), gp = v.osc('sine', 990 * p, t, end, v.gain(0.3, gg));
+    path(gs.frequency, t, [[0, 360 * p], [0.15, 1160 * p], [0.8, 1480 * p]]);
+    path(gp.frequency, t, [[0, 990 * p], [0.15, 3200 * p], [0.8, 4080 * p]]);
+    w.g.connect(v.gain(4, gs.frequency));
+    w.g.connect(v.gain(11, gp.frequency));
+    ad(gg.gain, t + 0.02, 0.03, 0.06, 0.7);
+    for (let i = 0; i < 6; i++) {
+      bloop(v, v.pan(rnd(-0.5, 0.5), o), t + 0.18 + i * rnd(0.05, 0.09), rnd(700, 1500) * p, 0.05 * (1 - i * 0.12), rnd(0.04, 0.07));
+    }
+    [86, 90, 93].forEach((m, i) => ping(v, o, t + 0.3 + i * 0.07, mtof(m) * p, 0.025, 0.35));
+  },
+  // Into a rising prismatic waterfall: water rush, airy lift, glitter climbing.
+  updraftEnter(v) {
+    const { t, out: o, p } = v, k = semi(v);
+    whoosh(v, o, t, 250 * p, 2600 * p, 0.9, 0.35, 0.9, 'pink', 0.7);
+    whoosh(v, o, t + 0.1, 1500 * p, 8000 * p, 0.8, 0.09, 1.6, 'white', 0.75);
+    const rg = v.gain(0, o), rush = v.gain(0.7, rg);
+    v.noise('pink', t, t + 1.3, v.filter('bandpass', 900 * p, 0.7, rush));
+    wander(v, 30, 0.35, rush.gain, t, t + 1.3);
+    ahr(rg.gain, t, 0.08, 0.25, 0.4, 0.7);
+    const g = v.gain(0, o), s = v.osc('sine', 180 * p, t, t + 0.9, g);
+    glide(s.frequency, t, 180 * p, 720 * p, 0.8);
+    ahr(g.gain, t, 0.3, 0.06, 0.2, 0.35);
+    [74, 76, 78, 80, 81, 85, 86, 90, 92, 93].forEach((m, i) => {
+      ping(v, v.pan(i % 2 ? 0.45 : -0.45, o), t + 0.12 + i * 0.065, mtof(m + k), 0.035 + i * 0.002, 0.5);
+    });
+    dsparkle(v, o, t + 0.5, 6, 0.6, 0.025, 93, 105);
+  },
+  // Dream Shard (~2.2 s): crystal strike, a Dmaj7#11 glass arpeggio through an
+  // echo, a breath of choir, shimmer bloom over a soft sub, falling glitter.
+  shard(v) {
+    const { t, out: o } = v, k = semi(v), T = t + 0.5;
+    const e = echo(v, o, 0.19, 0.38, 0.5, t + 3.4);
+    burst(v, o, t, 'white', 'highpass', 5000, 0.7, 0.0005, 0.03, 0.2);
+    glassF(v, o, t, mtof(86 + k), 0.09, 1.6);
+    ping(v, o, t, mtof(98 + k), 0.04, 0.5);
+    [74, 81, 85, 88, 92, 93, 97, 100].forEach((m, i) => glassF(v, e, t + 0.06 + i * 0.06, mtof(m + k), 0.055, 1.2, i % 2 ? 0.5 : -0.5));
+    choir(v, o, T, [62, 69, 73, 76].map((m) => m + k), 1.0, { vowel: 'a', att: 0.3, rel: 1.1, level: 0.035 });
+    shimmer(v, o, T, mtof(86 + k), 0.025, 1.8);
+    shimmer(v, o, T, mtof(93 + k), 0.018, 1.8);
+    shimmer(v, o, T + 0.1, mtof(100 + k), 0.012, 1.6);
+    const sg = v.gain(0, o);
+    v.osc('sine', mtof(38 + k), t, t + 1.8, sg);
+    ahr(sg.gain, t, 0.08, 0.2, 0.3, 1.2);
+    dsparkle(v, o, T + 0.2, 10, 1.3, 0.028, 88, 104, -1);
+  },
+  // Glass stepping-stone forming in mid-air. The pitch option walks D Lydian,
+  // so a run of stones (pitch 0.8 -> 1.6) climbs a scale.
+  dreamStep(v) {
+    const { t, out: o } = v, f = mtof(snapScale(81 + semi(v), LYD, 2)), T = t + 0.035;
+    const sw = v.gain(0, o);
+    v.noise('white', t, T + 0.05, v.filter('bandpass', Math.min(f * 4, 9000), 3, sw));
+    rev(sw.gain, t, T, 0.06);
+    glassF(v, o, T, f, 0.07, 0.9, 0, 0.004);
+    ping(v, o, T, f * 2, 0.02, 0.25);
+    shimmer(v, o, T + 0.02, f * 2, 0.01, 0.7);
+  },
+  // Glass manta far off: a whale-like moan in two swells, nasal "oo" opening to
+  // "oh", a glassy third partial, a long slap-back across the water (~2.5 s).
+  mantaCall(v) {
+    const { t, out: o, p } = v, D = 2.5, end = t + D + 0.1, f0 = 240 * p;
+    const e = echo(v, v.filter('lowpass', 2400, 0.7, o), 0.42, 0.42, 0.45, t + D + 2.5);
+    const bank = formants(v, 'u', e, 1.1, 1);
+    bank.inp.connect(v.filter('lowpass', 700, 0.7, v.gain(0.3, e)));
+    const g = v.gain(0, bank.inp), sh = [[0, 0.78], [0.55, 1.22], [1.05, 1.32], [1.45, 1.06], [2.45, 0.7]];
+    const a = v.osc('triangle', f0, t, end, g), b = v.osc('sawtooth', f0, t, end, v.gain(0.25, g));
+    b.detune.value = 8;
+    for (const x of [a, b]) path(x.frequency, t, sh.map(([s, r]) => [s, f0 * r]));
+    const vib = lfo(v, 4.2, f0 * 0.012, a.frequency, t, end);
+    vib.g.connect(b.frequency);
+    sayVowel(bank, 'o', t + 1.2, 0.6);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.3, t + 0.5);
+    g.gain.linearRampToValueAtTime(0.12, t + 1.1);
+    g.gain.linearRampToValueAtTime(0.28, t + 1.45);
+    g.gain.exponentialRampToValueAtTime(E, t + D);
+    const gl = v.gain(0, e), c = v.osc('sine', f0 * 3, t, end, gl);
+    path(c.frequency, t, sh.map(([s, r]) => [s, f0 * 3 * r]));
+    vib.g.connect(v.gain(3, c.frequency));
+    ahr(gl.gain, t + 0.3, 0.4, 0.03, 0.9, 0.9);
+    const bg = v.gain(0, e);
+    v.noise('pink', t, end, v.filter('bandpass', 600, 1, bg));
+    ahr(bg.gain, t, 0.4, 0.04, 1.2, 0.8);
+  },
+  // Footstep on still mirror-water: wet tap, a droplet, a faint ripple ring
+  // (two close sines beating ~15 Hz).
+  mirrorStep(v) {
+    const { t, out: o, p } = v, f = rnd(1900, 2600) * p;
+    burst(v, o, t, 'pink', 'bandpass', rnd(900, 1300) * p, 1.4, 0.002, rnd(0.03, 0.05), 0.12);
+    thump(v, o, t, rnd(120, 150) * p, 70, 0.045, 0.06);
+    bloop(v, o, t + 0.01, rnd(900, 1400) * p, 0.035, 0.035, 1.6);
+    const g = v.gain(0, o);
+    v.osc('sine', f, t + 0.02, t + 0.32, g);
+    v.osc('sine', f * 1.007, t + 0.02, t + 0.32, g);
+    ad(g.gain, t + 0.02, 0.01, 0.012, 0.25);
+  },
+  // Man-sized moth: papery wingbeats (~23 Hz) over a soft pulse of air.
+  mothFlutter(v) {
+    const { t, out: o, p } = v, D = 0.4, end = t + D + 0.05;
+    const g = v.gain(0, o), am = v.gain(0.5, g);
+    v.noise('white', t, end, v.filter('bandpass', 2600 * p, 0.9, am));
+    v.buffer(S.buf.crackle, t, end, v.filter('highpass', 2000, 0.7, v.gain(0.6, am)), 1.4);
+    lfo(v, 23 * p, 0.5, am.gain, t, end, 'triangle');
+    ahr(g.gain, t, 0.05, 0.3, D * 0.4, D * 0.45);
+    const lg = v.gain(0, o), lam = v.gain(0.5, lg);
+    v.noise('pink', t, end, v.filter('lowpass', 500 * p, 0.8, lam));
+    lfo(v, 23 * p, 0.5, lam.gain, t, end);
+    ahr(lg.gain, t, 0.05, 0.4, D * 0.35, D * 0.5);
+  },
+  // Swooping moth: whoosh up then down past you, rapid flutter, a thin shriek.
+  mothDive(v) {
+    const { t, out: o, p } = v, end = t + 0.9, T = t + 0.15;
+    whoosh(v, o, t, 400 * p, 2200 * p, 0.4, 0.3, 1.1, 'pink', 0.8);
+    whoosh(v, o, t + 0.32, 2400 * p, 450 * p, 0.5, 0.32, 1.0, 'pink', 0.15);
+    const fg = v.gain(0, o), am = v.gain(0.5, fg);
+    v.noise('white', t, end, v.filter('bandpass', 3000 * p, 1, am));
+    lfo(v, 28, 0.5, am.gain, t, end, 'triangle');
+    ahr(fg.gain, t, 0.3, 0.12, 0.1, 0.4);
+    const sg = v.gain(0, o), s = v.osc('sawtooth', 2600 * p, T, end, v.filter('bandpass', 4000 * p, 3, sg));
+    path(s.frequency, T, [[0, 2200 * p], [0.25, 3600 * p], [0.65, 2400 * p]]);
+    lfo(v, 32, 150 * p, s.frequency, T, end);
+    ahr(sg.gain, T, 0.12, 0.07, 0.15, 0.35);
+  },
+  // Moth dissolves: papery crumple, a falling sigh, then glittering dust.
+  mothDie(v) {
+    const { t, out: o, p } = v;
+    burst(v, o, t, 'pink', 'lowpass', 1800, 0.7, 0.002, 0.12, 0.35);
+    crackle(v, o, t, 0.3, 0.3, 2500);
+    const sg = v.gain(0, o), s = v.osc('sine', 1300 * p, t, t + 0.8, sg);
+    glide(s.frequency, t, 1300 * p, 420 * p, 0.7);
+    lfo(v, 7, 30 * p, s.frequency, t, t + 0.8);
+    ahr(sg.gain, t, 0.02, 0.05, 0.2, 0.5);
+    const dg = v.gain(0, o);
+    v.noise('white', t + 0.05, t + 1.4, v.filter('highpass', 6000, 0.7, dg));
+    ahr(dg.gain, t + 0.05, 0.1, 0.08, 0.3, 0.9);
+    dsparkle(v, o, t + 0.08, 12, 1.1, 0.03, 90, 106, -1);
+    shimmer(v, o, t + 0.1, mtof(97) * p, 0.012, 1.1);
+  },
+  // Dark reflection rising out of the mirror (~1.3 s): a reversed glass cluster
+  // and air swelling into a hard stop, a liquid sucking pull and a low drone
+  // beneath, then the wet release as it breaks the surface.
+  twinRise(v) {
+    const { t, out: o, p } = v, k = semi(v), T = t + 1.05, end = T + 0.1;
+    const rg = v.gain(0, o);
+    for (const [m, a] of [[62, 1], [63, 0.7], [68, 0.8], [75, 0.5], [80, 0.35]]) {
+      const f = mtof(m + k);
+      v.osc('sine', f, t, end, v.gain(a, rg));
+      v.osc('sine', f * 2.76, t, end, v.gain(a * 0.3, rg));
+    }
+    rev(rg.gain, t, T, 0.05);
+    const ng = v.gain(0, o), bp = v.filter('bandpass', 1000, 0.8, ng);
+    v.noise('white', t, end, bp);
+    glide(bp.frequency, t, 600, 6000, 1.05);
+    rev(ng.gain, t, T, 0.12);
+    const lg = v.gain(0, o), lbp = v.filter('bandpass', 300 * p, 8, lg);
+    v.noise('brown', t, end, lbp);
+    path(lbp.frequency, t, [[0, 200 * p], [1.0, 900 * p]]);
+    wander(v, 14, 120 * p, lbp.frequency, t, end);                       // gurgle
+    ahr(lg.gain, t, 0.4, 1.4, 0.5, 0.15);
+    const dg = v.gain(0, v.filter('lowpass', 400, 0.7, o));
+    for (const dt of [-10, 10]) {
+      const d = v.osc('sawtooth', mtof(38 + k), t, end, dg);
+      d.detune.value = dt;
+      glide(d.frequency, t, mtof(35 + k), mtof(38 + k), 1.0);
+    }
+    ahr(dg.gain, t, 0.6, 0.12, 0.35, 0.15);
+    burst(v, o, T, 'pink', 'lowpass', 2000, 0.7, 0.002, 0.15, 0.3);
+    thump(v, o, T, 160 * p, 60, 0.15, 0.3);
+    for (let i = 0; i < 4; i++) bloop(v, v.pan(rnd(-0.5, 0.5), o), T + rnd(0, 0.2), rnd(500, 1200) * p, 0.04, 0.05);
+  },
+  // Reflection's blade: a reversed glass swish (swells into the cut) and a
+  // thin ring after it.
+  twinSlash(v) {
+    const { t, out: o, p } = v, T = t + 0.16;
+    whoosh(v, o, t, 1200 * p, 4200 * p, 0.2, 0.4, 2.2, 'white', 0.85);
+    whoosh(v, o, t, 500 * p, 1800 * p, 0.21, 0.25, 0.9, 'pink', 0.85);
+    const rg = v.gain(0, o);
+    for (const [r, a] of [[1, 1], [1.5, 0.4], [2.76, 0.4]]) v.osc('sine', 1800 * p * r, t, T + 0.05, v.gain(a, rg));
+    rev(rg.gain, t, T, 0.05, 0.015);
+    partials(v, o, T, 2400 * p, [1, 1.41, 2.76], [0.025, 0.015, 0.01], [0.25, 0.18, 0.1]);
+  },
+  // The reflection breaks like a mirror: crack, ringing panes, shards raining
+  // down, a dark tone sinking away under the glass (~1.3 s).
+  twinShatter(v) {
+    const { t, out: o, p } = v;
+    burst(v, o, t, 'white', 'highpass', 2500, 0.7, 0.0005, 0.15, 0.55);
+    burst(v, o, t, 'pink', 'bandpass', 1500 * p, 0.8, 0.001, 0.08, 0.35);
+    thump(v, o, t, 280 * p, 120, 0.08, 0.35, 'triangle');
+    crackle(v, o, t, 0.35, 0.45, 3500);
+    for (let i = 0; i < 7; i++) {
+      partials(v, v.pan(rnd(-0.7, 0.7), o), t + rnd(0, 0.05), rnd(1400, 3800) * p, [1, 1.48, 2.76, 3.9], [0.04, 0.03, 0.02, 0.01], [0.5, 0.35, 0.22, 0.12]);
+    }
+    for (let i = 0; i < 14; i++) {
+      const tt = t + 0.08 + Math.pow(i / 14, 1.2) * 1.0 + rnd(0, 0.04);
+      ping(v, v.pan(rnd(-0.8, 0.8), o), tt, rnd(2500, 6000) * p, 0.03 * (1 - i / 20), 0.1);
+      burst(v, o, tt, 'white', 'highpass', 6000, 0.7, 0.0005, 0.008, 0.04);
+    }
+    const sg = v.gain(0, o), s = v.osc('sine', 420 * p, t, t + 1.0, sg);
+    glide(s.frequency, t, 420 * p, 70 * p, 0.9);
+    ahr(sg.gain, t, 0.01, 0.1, 0.1, 0.8);
+  },
+  // Glass pufferfish inflating (~0.8 s): gulping air, a stretching rubbery-glass
+  // squeak climbing, the skin pinging taut at the end.
+  pufferInflate(v) {
+    const { t, out: o, p } = v, D = 0.75, end = t + D + 0.05, T = t + D - 0.04;
+    const g = v.gain(0, o), bp = v.filter('bandpass', 900 * p, 5, g), rough = v.gain(0.7, bp);
+    const s = v.osc('sawtooth', 260 * p, t, end, rough);
+    path(s.frequency, t, [[0, 220 * p], [D, 700 * p]]);
+    path(bp.frequency, t, [[0, 700 * p], [D, 2400 * p]]);
+    wander(v, 45, 0.35, rough.gain, t, end);                             // stick-slip
+    wander(v, 25, 18 * p, s.frequency, t, end);
+    ahr(g.gain, t, 0.1, 0.22, D - 0.2, 0.1);
+    const gg = v.gain(0, o), gs = v.osc('sine', 600 * p, t, end, gg), g2 = v.osc('sine', 1656 * p, t, end, v.gain(0.3, gg));
+    path(gs.frequency, t, [[0, 600 * p], [D, 1900 * p]]);
+    path(g2.frequency, t, [[0, 1656 * p], [D, 5244 * p]]);
+    ahr(gg.gain, t, 0.3, 0.03, 0.35, 0.1);
+    whoosh(v, o, t, 500 * p, 2000 * p, D, 0.12, 1, 'pink', 0.6);
+    ping(v, o, T, 2900 * p, 0.05, 0.4);
+    partials(v, o, T, 1650 * p, [1, 2.76, 5.4], [0.035, 0.02, 0.01], [0.5, 0.25, 0.1]);
+  },
+  bubbleShot(v) {
+    const { t, out: o, p } = v;
+    bloop(v, v.filter('lowpass', 2500, 0.7, o), t, 260 * p, 0.3, 0.12, 2.6);
+    bloop(v, o, t + 0.025, 520 * p, 0.12, 0.08, 2.2);
+    burst(v, o, t, 'pink', 'lowpass', 900, 0.7, 0.004, 0.06, 0.2);
+    ping(v, o, t + 0.04, 1900 * p, 0.015, 0.15);
+  },
+  bubblePop(v) {
+    const { t, out: o, p } = v;
+    burst(v, o, t, 'white', 'bandpass', 3500 * p, 0.9, 0.0003, 0.02, 0.5);
+    bloop(v, o, t, 1300 * p, 0.12, 0.03, 2.2);
+    const fg = v.gain(0, o);
+    v.buffer(S.buf.crackle, t + 0.005, t + 0.4, v.filter('highpass', 4000, 0.7, fg), 2);
+    v.noise('white', t + 0.005, t + 0.4, v.filter('highpass', 7000, 0.7, v.gain(0.15, fg)));
+    ad(fg.gain, t + 0.005, 0.005, 0.35, 0.3);
+    ping(v, o, t + 0.01, mtof(snapScale(98 + rnd(-3, 3), DREAM, 2)) * p, 0.025, 0.2);
+  },
+  // The sleeping colossus opens its eyes (~4.5 s): earth-deep rumble and stone
+  // grind, a vast "oo" choir swelling to "ah" on D Lydian, the bell as the eyes
+  // open with a glint, bubbles stirring in the lagoon.
+  colossusWake(v) {
+    const { t, out: o, p } = v, k = semi(v), D = 4.2, T = t + 2.3, K = (a) => a.map((m) => m + k);
+    const rg = v.gain(0, o);
+    v.noise('brown', t, t + D, v.filter('lowpass', 110 * p, 0.8, rg));
+    ahr(rg.gain, t, 1.0, 0.9, 1.6, 1.5);
+    const sg = v.gain(0, o), sl = v.filter('lowpass', 180, 0.8, sg);
+    for (const dt of [-6, 6]) v.osc('sawtooth', mtof(26 + k), t, t + D, sl).detune.value = dt;
+    v.osc('sine', mtof(38 + k), t, t + D, v.gain(0.6, sg));
+    ahr(sg.gain, t, 1.4, 0.3, 1.2, 1.5);
+    const gg = v.gain(0, o), rough = v.gain(0.5, gg), bp = v.filter('bandpass', 350 * p, 1.6, rough);
+    v.noise('brown', t, t + D, bp);
+    wander(v, 22, 0.4, rough.gain, t, t + D);
+    wander(v, 3, 90, bp.frequency, t, t + D);
+    ahr(gg.gain, t + 0.3, 0.8, 0.5, 1.0, 1.2);
+    const bank = choir(v, o, t + 0.3, K([38, 45, 50, 57, 62, 66]), 3.2, { vowel: 'u', att: 2.0, rel: 1.4, level: 0.06 });
+    sayVowel(bank, 'a', T - 0.4, 0.8);
+    sayVowel(bank, 'o', T + 1.2, 1);
+    choir(v, o, T - 0.2, K([69, 74, 76, 80]), 1.8, { vowel: 'a', att: 0.5, rel: 1.4, level: 0.03 });
+    bigBell(v, o, T, mtof(50 + k), 0.13, 4);
+    tbell(v, o, T + 0.05, 86 + k, 0.6, 3);
+    glassF(v, o, T, mtof(93 + k), 0.04, 2);
+    shimmer(v, o, T + 0.1, mtof(98 + k), 0.015, 2);
+    dsparkle(v, o, T + 0.1, 8, 1.2, 0.02, 93, 105);
+    for (let i = 0; i < 8; i++) bloop(v, v.pan(rnd(-0.7, 0.7), o), t + 0.6 + rnd(0, 2.8), rnd(180, 420) * p, 0.06, rnd(0.08, 0.14), 2.2);
+  },
+  // A staircase of light (~2.5 s): glass steps climbing two octaves of D
+  // Lydian, gently accelerating and fanning out, an airy rise, a top bloom.
+  lightStair(v) {
+    const { t, out: o, p } = v, k = semi(v), T = t + 1.6, K = (a) => a.map((m) => m + k);
+    const e = echo(v, o, 0.16, 0.3, 0.35, t + 3.5);
+    [74, 76, 78, 80, 81, 83, 85, 86, 88, 90, 92, 93, 95, 97, 98].forEach((m, i) => {
+      glassF(v, e, t + i * 0.12 - i * i * 0.0015, mtof(m + k), 0.045, 1.0, (i % 2 ? 1 : -1) * (0.2 + i * 0.04));
+    });
+    whoosh(v, o, t, 800 * p, 7000 * p, 2.0, 0.08, 1.2, 'white', 0.8);
+    whoosh(v, o, t, 300 * p, 1500 * p, 1.8, 0.12, 0.8, 'pink', 0.7);
+    for (const m of [74, 81, 88, 92]) shimmer(v, o, T - 0.6, mtof(m + k), 0.012, 2.2);
+    choir(v, o, T, K([62, 66, 69, 73, 76]), 0.9, { vowel: 'a', att: 0.4, rel: 1.0, level: 0.025 });
+    dsparkle(v, o, T, 8, 0.9, 0.025, 95, 106);
+  },
+  // The hero's light mid-air slash: quicker, airier and brighter than slash1.
+  airSlash(v) {
+    const { t, out: o, p } = v;
+    whoosh(v, o, t, 1300 * p, 5200 * p, 0.11, 0.42, 2.0, 'white', 0.3);
+    whoosh(v, o, t, 600 * p, 2200 * p, 0.13, 0.25, 0.9, 'pink', 0.35);
+    ping(v, o, t + 0.04, 3300 * p, 0.012, 0.15);
+  },
+  // Somnia's cry (~2.2 s): an alien four-voice choir sliding as one (D, G#, A,
+  // Eb), vowels "oo-ah-ee-oh", ring-modulated shimmer, a breathy high whistle.
+  somniaCry(v) {
+    const { t, out: o, p } = v, k = semi(v), D = 2.2, end = t + D + 0.1;
+    const e = echo(v, o, 0.29, 0.35, 0.4, t + D + 2);
+    const mix = v.gain(1, e), ring = v.gain(0, v.gain(0.6, e));
+    mix.connect(ring);
+    v.osc('sine', 47 * p, t, end, ring.gain);
+    cry(v, mix, t, [74, 80, 81, 87].map((m) => m + k), D, {
+      vowel: 'u', shift: 1.2, att: 0.25, rel: 0.9, level: 0.07, vib: 6.5, vd: 0.018,
+      shape: [[0, 0.94], [0.18, 1.06], [0.45, 1.0], [0.75, 1.12], [1, 0.84]],
+      vow: [[0.22, 'a'], [0.55, 'i'], [0.82, 'o']],
+    });
+    const wg = v.gain(0, e), wbp = v.filter('bandpass', 3000 * p, 25, wg);
+    v.noise('white', t, end, wbp);
+    path(wbp.frequency, t, [[0, 2800 * p], [0.6, 4200 * p], [D, 2500 * p]]);
+    ahr(wg.gain, t, 0.3, 0.5, 1.0, 0.8);
+  },
+  // One enormous wingbeat: deep displaced-air whump, papery rustle, pressure thump.
+  wingBeat(v) {
+    const { t, out: o, p } = v, end = t + 0.8;
+    const g = v.gain(0, o), lp = v.filter('lowpass', 180 * p, 0.9, g);
+    v.noise('pink', t, end, lp);
+    v.noise('brown', t, end, v.gain(1.0, lp));
+    path(lp.frequency, t, [[0, 140 * p], [0.16, 520 * p], [0.7, 110 * p]]);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(1, t + 0.15);
+    g.gain.exponentialRampToValueAtTime(E, t + 0.7);
+    thump(v, o, t + 0.12, 55 * p, 30, 0.35, 0.4);
+    const rg = v.gain(0, o), am = v.gain(0.6, rg);
+    v.buffer(S.buf.crackle, t, end, v.filter('bandpass', 3000, 0.8, am), 1.1);
+    v.noise('white', t, end, v.filter('bandpass', 2400, 1.2, v.gain(0.12, am)));
+    wander(v, 40, 0.5, am.gain, t, end);
+    ahr(rg.gain, t, 0.08, 0.35, 0.15, 0.4);
+    whoosh(v, o, t, 300 * p, 900 * p, 0.45, 0.15, 0.9, 'pink', 0.4);
+  },
+  // Moth-dust ring spreading over the floor (~1.2 s): a sparkly hiss whose
+  // stereo image opens outward, glittering pings drifting with it.
+  dustRing(v) {
+    const { t, out: o, p } = v, D = 1.2, end = t + D + 0.05;
+    burst(v, o, t, 'pink', 'lowpass', 700, 0.7, 0.003, 0.15, 0.3);
+    for (const side of [-1, 1]) {
+      const pn = v.pan(0, o), g = v.gain(0, pn), bp = v.filter('bandpass', 2500 * p, 2.5, g);
+      v.noise('white', t, end, bp);
+      glide(bp.frequency, t, 2500 * p, 7500 * p, D);
+      bp.Q.setValueAtTime(2.5, t);
+      bp.Q.linearRampToValueAtTime(0.6, t + D);
+      if (pn.pan) { pn.pan.setValueAtTime(0, t); pn.pan.linearRampToValueAtTime(side * 0.9, t + D); }
+      ahr(g.gain, t, 0.06, 0.18, 0.35, D - 0.41);
+    }
+    dsparkle(v, o, t + 0.05, 14, 1.0, 0.025, 93, 107);
+    shimmer(v, o, t, mtof(93) * p, 0.012, D);
+  },
+  // Wing-eye fires a glowing orb: hollow resonant "whoom" (sine + tube
+  // resonance swelling and settling, tremolo glow) with a glassy blink.
+  eyeOrb(v) {
+    const { t, out: o, p } = v, end = t + 0.65, sh = [[0, 1], [0.18, 1.77], [0.6, 1.46]];
+    const g = v.gain(0, o), trem = v.gain(0.75, g);
+    const s = v.osc('sine', 130 * p, t, end, trem), s2 = v.osc('triangle', 260 * p, t, end, v.gain(0.3, trem));
+    path(s.frequency, t, sh.map(([x, r]) => [x, 130 * p * r]));
+    path(s2.frequency, t, sh.map(([x, r]) => [x, 260 * p * r]));
+    lfo(v, 9, 0.25, trem.gain, t, end);
+    ahr(g.gain, t, 0.07, 0.3, 0.12, 0.4);
+    const ng = v.gain(0, o), bp = v.filter('bandpass', 460 * p, 12, ng);
+    v.noise('pink', t, end, bp);
+    path(bp.frequency, t, sh.map(([x, r]) => [x, 260 * p * r]));
+    ahr(ng.gain, t, 0.06, 0.9, 0.1, 0.35);
+    glassF(v, o, t, 1760 * p, 0.03, 0.4);
+    whoosh(v, o, t, 600 * p, 2400 * p, 0.35, 0.06, 1.4, 'white', 0.3);
+  },
+  // Wing-eye struck: wet glassy crack and squelch, a pained choral "ah!" that
+  // bends down.
+  eyeHurt(v) {
+    const { t, out: o, p } = v, k = semi(v);
+    burst(v, o, t, 'white', 'highpass', 3200, 0.7, 0.0005, 0.05, 0.5);
+    partials(v, o, t, 2300 * p, [1, 1.47, 2.76, 3.9], [0.05, 0.035, 0.02, 0.012], [0.3, 0.2, 0.12, 0.08]);
+    thump(v, o, t, 240 * p, 110, 0.08, 0.35, 'triangle');
+    const wg = v.gain(0, o), wbp = v.filter('bandpass', 900 * p, 3, wg);
+    v.noise('pink', t, t + 0.2, wbp);
+    glide(wbp.frequency, t, 1200 * p, 300 * p, 0.15);
+    ad(wg.gain, t, 0.003, 0.4, 0.15);
+    bloop(v, o, t + 0.01, 600 * p, 0.08, 0.07, 0.5);
+    cry(v, o, t + 0.02, [76, 77, 83].map((m) => m + k), 0.65, {
+      vowel: 'a', shift: 1.15, att: 0.03, rel: 0.4, level: 0.08, vib: 7, vd: 0.02,
+      shape: [[0, 1.04], [0.15, 1], [1, 0.89]], vow: [[0.4, 'e']],
+    });
+  },
+  // Wing-eye destroyed (~1.8 s): glass burst and shard spray, a choir falling
+  // away an octave, glitter raining down.
+  eyeBurst(v) {
+    const { t, out: o, p } = v, k = semi(v);
+    burst(v, o, t, 'white', 'highpass', 2500, 0.7, 0.0005, 0.2, 0.55);
+    burst(v, o, t, 'pink', 'lowpass', 2000, 0.7, 0.001, 0.15, 0.4);
+    thump(v, v.shaper(driveCurve(2), v.gain(0.8, o)), t, 160 * p, 50, 0.25, 0.7);
+    crackle(v, o, t, 0.4, 0.4, 3000);
+    for (let i = 0; i < 8; i++) {
+      partials(v, v.pan(rnd(-0.7, 0.7), o), t + rnd(0, 0.08), rnd(1500, 4200) * p, [1, 1.48, 2.76], [0.035, 0.022, 0.014], [0.4, 0.28, 0.16]);
+    }
+    cry(v, o, t + 0.05, [81, 86, 88].map((m) => m + k), 1.5, {
+      vowel: 'a', shift: 1.1, att: 0.04, rel: 0.9, level: 0.07, vib: 6, vd: 0.015,
+      shape: [[0, 1.02], [0.15, 1], [1, 0.52]], vow: [[0.3, 'o'], [0.7, 'u']],
+    });
+    dsparkle(v, o, t + 0.1, 12, 1.3, 0.028, 88, 106, -1);
+  },
+  // Somnia crashes onto the mirror (~2.8 s): heavy thud, a sheet of water and
+  // falling droplets, the whole floor ringing like a struck glass plate, three
+  // woozy falling chimes (stunned).
+  somniaFall(v) {
+    const { t, out: o, p } = v, k = semi(v), f = mtof(50 + k);
+    thump(v, v.shaper(driveCurve(2), v.gain(0.9, o)), t, 85 * p, 28, 0.7, 1);
+    burst(v, o, t, 'brown', 'lowpass', 240, 0.8, 0.005, 0.9, 0.8);
+    const sp = burst(v, o, t + 0.01, 'pink', 'bandpass', 2000 * p, 0.7, 0.004, 0.7, 0.55);
+    glide(sp.frequency, t + 0.01, 2500 * p, 500 * p, 0.7);
+    burst(v, o, t, 'white', 'highpass', 3000, 0.7, 0.002, 0.3, 0.25);
+    for (let i = 0; i < 12; i++) {
+      bloop(v, v.pan(rnd(-0.8, 0.8), o), t + 0.15 + rnd(0, 0.9), rnd(700, 2000) * p, rnd(0.03, 0.07), rnd(0.03, 0.06), 1.7);
+    }
+    for (const [r, a, d] of [[1, 0.06, 2.6], [2.31, 0.04, 2.0], [3.6, 0.03, 1.5], [5.12, 0.02, 1.0], [6.9, 0.012, 0.7]]) {
+      const g = v.gain(0, o);
+      v.osc('sine', f * r, t, t + d + 0.1, g);
+      v.osc('sine', f * r * 1.004, t, t + d + 0.1, v.gain(0.7, g));
+      ad(g.gain, t, 0.002, a, d);
+    }
+    [93, 88, 86].forEach((m, i) => glassF(v, o, t + 0.6 + i * 0.25, mtof(m + k), 0.03, 1.2, (i - 1) * 0.5));
+  },
+  // Somnia dissolves into a storm of light (~5.5 s): her cry falls away over
+  // slowing wingbeats while a glittering storm climbs; a burst of light at 2.2 s,
+  // then a vast D major chord (choir, tape pad, bells, glass cascade).
+  somniaDeath(v) {
+    const { t, out: o, p } = v, k = semi(v), T = t + 2.2, K = (a) => a.map((m) => m + k);
+    cry(v, o, t, K([74, 80, 87]), 2.2, {
+      vowel: 'a', shift: 1.15, att: 0.1, rel: 1.0, level: 0.07, vib: 6, vd: 0.02,
+      shape: [[0, 1], [0.2, 1.08], [1, 0.6]], vow: [[0.35, 'o'], [0.7, 'u']],
+    });
+    const fg = v.gain(0, o), am = v.gain(0.5, fg);
+    v.noise('white', t, T, v.filter('bandpass', 2200, 1, am));
+    const fl = lfo(v, 18, 0.5, am.gain, t, T, 'triangle');
+    glide(fl.osc.frequency, t, 18, 5, 2.0);
+    ahr(fg.gain, t, 0.1, 0.12, 1.2, 0.8);
+    const sg = v.gain(0, o), bp = v.filter('bandpass', 800, 1.2, sg);
+    v.noise('white', t, T + 0.05, bp);
+    glide(bp.frequency, t, 600, 7000, 2.2);
+    rev(sg.gain, t, T, 0.3);
+    for (let i = 0; i < 26; i++) {
+      const x = i / 26;
+      ping(v, v.pan(rnd(-0.8, 0.8), o), t + 2.15 * Math.pow(x, 0.7), mtof(snapScale(78 + x * 26 + rnd(-2, 2), DREAM, 2) + k), 0.02 + x * 0.025, 0.3);
+    }
+    burst(v, o, T, 'white', 'highpass', 2500, 0.7, 0.001, 1.4, 0.3);
+    thump(v, v.shaper(driveCurve(2), v.gain(0.8, o)), T, 90 * p, 30, 0.8, 0.8);
+    burst(v, o, T, 'brown', 'lowpass', 200, 0.7, 0.01, 1.5, 0.5);
+    perc(v, o, T, 'crash', 1);
+    const bank = choir(v, o, T, K([50, 57, 62, 66, 69, 74, 76]), 2.6, { vowel: 'o', att: 0.25, rel: 1.6, level: 0.06 });
+    sayVowel(bank, 'a', T + 0.4, 0.8);
+    wpad(v, o, T, K([50, 57, 62, 66, 69]), 2.4, 1.6, { att: 0.15, rel: 1.6, cut: 2400 });
+    bigBell(v, o, T, mtof(38 + k), 0.12, 5);
+    tbell(v, o, T, 74 + k, 0.8, 3.5);
+    tbell(v, o, T + 0.3, 81 + k, 0.6, 3);
+    tbell(v, o, T + 0.6, 86 + k, 0.5, 2.6);
+    [98, 93, 90, 86, 81, 78, 74].forEach((m, i) => glassF(v, o, T + 0.5 + i * 0.13, mtof(m + k), 0.04, 2.0, i % 2 ? 0.4 : -0.4));
+    shimmer(v, o, T + 0.3, mtof(86 + k), 0.02, 3.2);
+    shimmer(v, o, T + 0.3, mtof(90 + k), 0.015, 3.2);
+    dsparkle(v, o, T + 0.4, 16, 2.6, 0.025, 88, 106, -1);
+    const bg = v.gain(0, o);
+    v.osc('sine', mtof(38 + k), T, T + 3.4, bg);
+    ahr(bg.gain, T, 0.05, 0.25, 0.6, 2.6);
+  },
+  // Into the mirror (~2.2 s): a swirling reversed whoosh (spinning filter,
+  // circling pan, both accelerating) and a reversed glass chord swelling into
+  // a hard stop, then a soft glass chime with echo.
+  dreamPortal(v) {
+    const { t, out: o, p } = v, k = semi(v), T = t + 1.1, K = (a) => a.map((m) => m + k);
+    const pn = v.pan(0, o), g = v.gain(0, pn), bp = v.filter('bandpass', 900 * p, 2.5, g);
+    v.noise('pink', t, T + 0.05, bp);
+    v.noise('white', t, T + 0.05, v.gain(0.3, bp));
+    glide(bp.frequency, t, 500 * p, 3500 * p, 1.1);
+    const sw = lfo(v, 3, 300 * p, bp.frequency, t, T + 0.05);
+    glide(sw.osc.frequency, t, 2, 11, 1.1);
+    if (pn.pan) {
+      const ap = lfo(v, 1.5, 0.8, pn.pan, t, T + 0.05);
+      glide(ap.osc.frequency, t, 1.2, 6, 1.1);
+    }
+    rev(g.gain, t, T, 0.5);
+    const rg = v.gain(0, o);
+    for (const m of K([62, 69, 76, 80])) {
+      const f = mtof(m);
+      v.osc('sine', f, t, T + 0.05, rg);
+      v.osc('sine', f * 2.76, t, T + 0.05, v.gain(0.2, rg));
+    }
+    rev(rg.gain, t, T, 0.04);
+    const e = echo(v, o, 0.23, 0.35, 0.4, T + 2.4);
+    [86, 93, 97, 100].forEach((m, i) => glassF(v, e, T + i * 0.05, mtof(m + k), 0.05, 1.6, (i - 1.5) * 0.3));
+    shimmer(v, o, T, mtof(93 + k), 0.015, 1.4);
+    thump(v, o, T, 110 * p, 50, 0.25, 0.25);
+  },
+
   // -------------------------------------------------------------- jingles
   // ~4 s: triplet pickup, then Bb - Gb - Ab - Bb (top line D - Db - Eb - F).
   victory(v) {
@@ -1798,6 +2533,11 @@ const SEND = {
   rideBell: 0.35, stringSnap: 0.2, queenLaugh: 0.45, queenSwipe: 0.15, queenSlam: 0.3, queenHurt: 0.3,
   puppetClatter: 0.25, curtain: 0.3, confetti: 0.3, cannon: 0.25, portalOpen: 0.5, portalEnter: 0.4,
   lanternOn: 0.3,
+  jellyBounce: 0.2, updraftEnter: 0.3, shard: 0.5, dreamStep: 0.4, mantaCall: 0.6, mirrorStep: 0.08,
+  mothFlutter: 0.1, mothDive: 0.15, mothDie: 0.3, twinRise: 0.3, twinSlash: 0.1, twinShatter: 0.3,
+  pufferInflate: 0.12, bubbleShot: 0.15, bubblePop: 0.15, colossusWake: 0.5, lightStair: 0.5, airSlash: 0.05,
+  somniaCry: 0.5, wingBeat: 0.15, dustRing: 0.3, eyeOrb: 0.25, eyeHurt: 0.25, eyeBurst: 0.35,
+  somniaFall: 0.35, somniaDeath: 0.55, dreamPortal: 0.45,
 };
 // Output trim per sound (calibrated by rendering every sound offline and
 // matching short-term loudness: combat hits on top, music below them,
@@ -1815,14 +2555,20 @@ const LEVEL = {
   impGiggle: 5, impThrow: 3.5, starShot: 2.7, starHit: 2.4, balloonPop: 1.6, rideBell: 0.85,
   stringSnap: 1.6, queenLaugh: 2.5, queenSwipe: 2.2, queenHurt: 2, puppetClatter: 1.8, curtain: 0.75,
   confetti: 2, portalEnter: 1.4, lanternOn: 1.4,
+  jellyBounce: 1.3, updraftEnter: 1.4, dreamStep: 1.5, mantaCall: 0.2, mirrorStep: 1.75, mothFlutter: 0.85,
+  mothDive: 1.8, mothDie: 1.15, twinRise: 1.1, twinSlash: 1.55, twinShatter: 2, pufferInflate: 1.6,
+  bubbleShot: 5, bubblePop: 8.5, colossusWake: 0.62, lightStair: 1.65, airSlash: 6.5, somniaCry: 0.85,
+  wingBeat: 0.9, dustRing: 1.5, eyeOrb: 0.67, eyeHurt: 1.65, eyeBurst: 1.1, somniaFall: 1.1,
+  somniaDeath: 0.72, dreamPortal: 1.65,
 };
 // Dropped first when the voice cap is reached.
 const LOW = new Set(['step', 'mote', 'select', 'skullChatter', 'wingFlap', 'land', 'potionThrow',
-  'tinStep', 'impGiggle']);
+  'tinStep', 'impGiggle', 'mirrorStep', 'mothFlutter']);
 // Musical sounds: no random pitch jitter (keeps them in tune / chains in key).
 const NO_JITTER = new Set(['mote', 'motesBurst', 'sigil', 'secret', 'victory', 'death', 'bossIntro',
   'confirm', 'pause', 'unpause', 'heal', 'heartUp', 'checkpoint', 'chest', 'bell', 'parry',
-  'enemyPop', 'gateOpen', 'dragonDie', 'doubleJump', 'ticket', 'jackCrank', 'portalOpen']);
+  'enemyPop', 'gateOpen', 'dragonDie', 'doubleJump', 'ticket', 'jackCrank', 'portalOpen',
+  'shard', 'dreamStep', 'updraftEnter', 'colossusWake', 'lightStair', 'somniaDeath', 'dreamPortal']);
 
 function resume() {
   try {
@@ -2019,6 +2765,71 @@ const LOOPS = {
       lfo(v, 6, 18, wh.frequency, t, null);
     },
   },
+  // Mirror lagoon (made to sit under the 'dream' music): breathy tuned air on
+  // open D-A-E, two far whale calls drifting in and out on slow random gates,
+  // a deep water hush, and the generated chime / lap / droplet bed at two
+  // speeds (the half-speed copy is an octave down and dimmer).
+  lagoon: {
+    level: 0.6, verb: 0.55,
+    build(v, out) {
+      const t = v.t, sr = S.ctx.sampleRate;
+      if (!S.buf.lagoon) S.buf.lagoon = makeLagoon(S.ctx);
+      v.buffer(S.buf.lagoon, t, null, v.gain(0.16, out), 1);
+      v.buffer(S.buf.lagoon, t, null, v.filter('lowpass', 2500, 0.7, v.gain(0.08, out)), 0.5);
+      for (const [m, side] of [[62, -0.4], [69, 0.5], [76, -0.6], [81, 0.3]]) {
+        const g = v.gain(0.25, v.pan(side, out));
+        v.noise('pink', t, null, v.filter('bandpass', mtof(m), 25, g));
+        wander(v, 0.06, 0.21, g.gain, t, null);          // slow breathing swells
+      }
+      v.noise('brown', t, null, v.filter('lowpass', 180, 0.7, v.gain(0.035, out)));
+      const far = v.filter('lowpass', 1500, 0.7, out);
+      for (const [f, side, th, hz] of [[250, -0.45, 0.35, 0.11], [170, 0.5, 0.45, 0.08]]) {
+        const gate = v.gain(0, v.pan(side, far));
+        v.noise('white', t, null, v.shaper(gateCurve(th), gate.gain), hz / sr);
+        const bank = formants(v, 'u', gate, f > 200 ? 1.1 : 0.95, 1);
+        const phr = v.gain(0.5, bank.inp);
+        lfo(v, 0.3, 0.5, phr.gain, t, null);             // moaning phrases
+        const s = v.osc('triangle', f, t, null, v.gain(0.04, phr));
+        wander(v, 0.35, f * 0.3, s.frequency, t, null);
+        lfo(v, 4.3, f * 0.012, s.frequency, t, null);
+      }
+    },
+  },
+  // Lifted by a rising waterfall: four pink-noise bands sweeping up a 4 s
+  // cycle Shepard-style (each fades in low and out high: an endless rise),
+  // the water's roar and spray, a soft endlessly rising octave tone and
+  // random glass glitter (sines on D Lydian behind sparse random gates).
+  updraft: {
+    level: 0.45, verb: 0.3,
+    build(v, out) {
+      const t = v.t, sr = S.ctx.sampleRate;
+      const ph = v.osc('sawtooth', 0.25, t, null), ph2 = v.osc('sawtooth', 0.07, t, null);
+      const air = v.gain(0.55, out), tone = v.gain(0.02, out);
+      for (let i = 0; i < 4; i++) {
+        const g = v.gain(0, air), bp = v.filter('bandpass', 10, 2.6, g);
+        v.noise('white', t, null, bp);
+        ph.connect(v.shaper(shepCurve(i / 4, 'f', 250, 6000), bp.frequency));
+        ph.connect(v.shaper(shepCurve(i / 4, 'a'), g.gain));
+        const tg = v.gain(0, tone), s = v.osc('sine', 0.01, t, null, tg);
+        ph2.connect(v.shaper(shepCurve(i / 4, 'f', 147, 2349), s.frequency));
+        ph2.connect(v.shaper(shepCurve(i / 4, 'a'), tg.gain));
+      }
+      const rg = v.gain(0.16, out), lp = v.filter('lowpass', 900, 0.7, rg);
+      v.noise('pink', t, null, lp);
+      v.noise('brown', t, null, v.filter('lowpass', 260, 0.7, v.gain(0.9, rg)));
+      wander(v, 2, 0.05, rg.gain, t, null);
+      wander(v, 0.7, 300, lp.frequency, t, null);
+      const hg = v.gain(0.04, out);
+      v.noise('white', t, null, v.filter('highpass', 5000, 0.7, hg));
+      wander(v, 6, 0.02, hg.gain, t, null);
+      for (const m of [98, 100, 102, 104, 105, 109]) {
+        const g = v.gain(0, v.pan(rnd(-0.7, 0.7), out)), f = mtof(m);
+        v.osc('sine', f, t, null, g);
+        v.osc('sine', f * 2.76, t, null, v.gain(0.25, g));
+        v.noise('white', t, null, v.shaper(gateCurve(0.55), v.gain(0.025, g.gain)), rnd(5, 9) / sr);
+      }
+    },
+  },
 };
 
 function startLoop(name, opts) {
@@ -2161,6 +2972,8 @@ const MIX = {
   harpsi: [0.75, 0.3], celesta: [0.9, 0.55], pizz: [0.9, 0.3], organ: [0.8, 0.6], tbell: [0.7, 0.9],
   bigbell: [0.6, 1.0], timp: [0.85, 0.4], brass: [0.75, 0.45], bass: [0.9, 0.1], perc: [0.7, 0.18],
   choir: [1, 0.7], calliope: [0.8, 0.45],
+  glass: [0.8, 0.6], wpad: [0.8, 0.5], sub: [0.9, 0.05], hand: [0.75, 0.2], rswell: [0.7, 0.6],
+  whistle: [0.8, 0.5], arpb: [0.85, 0.12], glead: [0.85, 0.45], swirl: [0.7, 0.5],
 };
 function tbus(tr, key) {
   let b = tr.buses[key];
@@ -2171,6 +2984,49 @@ function tbus(tr, key) {
     tr.buses[key] = b;
   }
   return b;
+}
+// Track-owned LFO onto an AudioParam (stopped with the track).
+function tlfo(tr, hz, depth, param) {
+  const o = S.ctx.createOscillator();
+  o.frequency.value = hz;
+  o.connect(tgain(tr, depth, param));
+  o.start();
+  tr.srcs.push(o);
+  return o;
+}
+// Instrument bus with optional tape wow (a short delay line swept by slow wow
+// and fast flutter: opt.wow = sweep depth in s) and an optional filtered
+// ping-pong echo (opt.echo = time in s). Pre-empts tbus(tr, key).
+function fxBus(tr, key, opt = {}) {
+  const c = S.ctx, [lvl, wet] = MIX[key] || [1, 0.3];
+  const inp = tgain(tr, 1), out = tgain(tr, lvl, tr.dry);
+  if (wet) out.connect(tgain(tr, wet, tr.wet));
+  let head = inp;
+  if (opt.wow) {
+    const d = tnode(tr, c.createDelay(0.2));
+    d.delayTime.value = opt.wow * 1.5 + 0.004;
+    inp.connect(d);
+    tlfo(tr, opt.wowHz || 0.5, opt.wow, d.delayTime);
+    tlfo(tr, 6.1, opt.wow * 0.04, d.delayTime);
+    head = d;
+  }
+  head.connect(out);
+  if (opt.echo) {
+    const send = tgain(tr, opt.mix ?? 0.35), fb = opt.fb ?? 0.35;
+    head.connect(send);
+    const lines = [-0.8, 0.8].map((x) => {
+      const d = tnode(tr, c.createDelay(2)), lp = tfilter(tr, 'lowpass', opt.cut || 3000, 0.6);
+      d.delayTime.value = opt.echo;
+      d.connect(lp);
+      if (c.createStereoPanner) { const pn = tnode(tr, c.createStereoPanner()); pn.pan.value = x; lp.connect(pn); pn.connect(out); } else lp.connect(out);
+      return { d, lp };
+    });
+    send.connect(lines[0].d);
+    lines[0].lp.connect(tgain(tr, fb, lines[1].d));
+    lines[1].lp.connect(tgain(tr, fb, lines[0].d));
+  }
+  tr.buses[key] = inp;
+  return inp;
 }
 // Shared formant "choir" bank for a track; sing() feeds its input.
 function makeChoir(tr, vowel, shift = 1) {
@@ -2192,6 +3048,7 @@ function morph(tr, vowel, t, dur) {
 
 const INST = {
   harpsi, celesta, pizz, tbell, timp, bass, perc, organ, brass, calliope,
+  glass, wpad, sub, hand, rswell, whistle, arpb, glead, swirl,
   bigbell: (v, to, t, m, vel = 1, len = 6) => bigBell(v, to, t, mtof(m), 0.12 * vel, len),
 };
 // One instrument event as its own short-lived Voice on the track bus.
@@ -2656,6 +3513,188 @@ const TRACKS = {
           if (e.len >= 4) sing(tr, t, [e.m], len, { att: 0.06, rel: 0.4, level: 0.04 });
           if (odd) N(tr, 'celesta', t, e.m + 12, 0.45, 0.8);
         }
+      }
+    },
+  },
+
+  // The Mirror Sea: D Lydian dream, 80 bpm 4/4, 16th grid, 32 bars (~96 s).
+  // Glass bells through tape wow and a dotted-8th ping-pong echo, warbling
+  // tape pads, a soft sub pulse (3+3+2), brushes / frame drum / shaker with a
+  // little swing, a distant wordless choir, reversed swells into sections.
+  // A drift: 8th glass arps, brushes | B float: frame-drum groove, the tune
+  // climbs | C kaleidoscope: Bb Lydian, 3-against-4 arps, half time, reversed
+  // chord swells, the choir sings the tune | D bloom: home, 16th arps, octaves.
+  // Odd passes: an ocarina whistle doubles the tune an octave down.
+  // A: Dmaj7 E/D Dmaj7 E/D Bm7 C#m7 Amaj7 E | B: F#m7 G#m7b5 Amaj7 Bm7 C#m7 Dmaj7 E/D E
+  // C: Bbmaj7 C/Bb Bbmaj7 C/Bb Gm7 Am7 Fmaj7 Asus4 | D: Dmaj7 E/D Bm7 C#m7 Dmaj7 E/D Amaj7 Asus4
+  dream: {
+    bpm: 80, spb: 4, bpb: 16, bars: 32, gain: 1.55,
+    chords: ['Dmaj7', 'E/D', 'Dmaj7', 'E/D', 'Bm7', 'C#m7', 'Amaj7', 'E',
+      'F#m7', 'G#m7b5', 'Amaj7', 'Bm7', 'C#m7', 'Dmaj7', 'E/D', 'E',
+      'Bbmaj7', 'C/Bb', 'Bbmaj7', 'C/Bb', 'Gm7', 'Am7', 'Fmaj7', 'Asus4',
+      'Dmaj7', 'E/D', 'Bm7', 'C#m7', 'Dmaj7', 'E/D', 'Amaj7', 'Asus4'],
+    seqs: {
+      mel: [`F#5 - - - A5 - C#6 - | B5 - - - G#5 - - - | F#5 - - A5 - - E6 - | D6 - - - C#6 - B5 - |
+             A5 - - - F#5 - D5 - | E5 - - - G#5 - B5 - | G#5 - - A5 - - C#6 - | B5 - - - - - . . |
+             C#6 - A5 - C#6 - E6 - | F#6 - - - D6 - B5 - | C#6 - - - E6 - G#6 - | F#6 - - - D6 - - - |
+             E6 - - C#6 - - G#5 B5 | A5 - - - F#5 - A5 - | G#5 - - - B5 - D6 - | E6 - - - - - . . |
+             D6 - - - - - F5 - | E6 - - - - - G5 - | A5 - - - F5 - D6 - | C6 - - - E6 - G6 - |
+             F6 - - D6 - - Bb5 - | C6 - - - E6 - A5 - | A5 - - - - - C6 - | D6 - - - C#6 - E6 - |
+             F#6 - - - A5 - C#6 - | B5 - - - G#5 - E6 - | D6 - - F#6 - - D6 - | C#6 - - - B5 - G#5 - |
+             A5 - - F#5 - - A5 - | G#5 - B5 - E6 - G#6 - | A6 - - - - - E6 - | D6 - - - - - C#6 -`, 2],
+    },
+    ARP8: [0, 2, 4, 3, 1, 3, 2, 4],
+    ARP16: [0, 2, 4, 5, 3, 1, 2, 4, 0, 2, 4, 5, 3, 4, 2, 1],
+    TRI: [0, 2, 4, 1, 3, 5],
+    DR: [
+      { brush: '....x.......x...', shk: '..x...x...x...x.' },
+      { dum: 'X.........x.....', tek: '....X.......X...', shk: 'x.X.x.X.x.X.x.X.', brush: '..x.......x.....', tick: '..............x.' },
+      { dum: 'X...............', tek: '........X.......', brush: 'x.......x.......', shk: '..x...x...x...x.', tick: '...x.....x.....x' },
+      { dum: 'X.....x...x.....', tek: '....X.......X..x', shk: 'x.X.x.X.x.X.x.X.', brush: '..x.......x.....', tick: '......x.......x.' },
+    ],
+    setup(tr) {
+      fxBus(tr, 'glass', { wow: 0.0016, wowHz: 0.42, echo: tr.sd * 3, fb: 0.38, mix: 0.38, cut: 2800 });
+      fxBus(tr, 'wpad', { wow: 0.003, wowHz: 0.33 });
+      fxBus(tr, 'whistle', { wow: 0.0015, wowHz: 0.42, echo: tr.sd * 6, fb: 0.25, mix: 0.25, cut: 2400 });
+      fxBus(tr, 'choir', { wow: 0.002, wowHz: 0.3 });
+      makeChoir(tr, 'u', 1);
+    },
+    step(tr, P, t) {
+      const { s, bar, b, pass } = P, sd = tr.sd, ch = this.chords[bar], sec = bar >> 3, odd = pass % 2 === 1;
+      const nx = this.chords[(bar + 1) % this.bars], lo = bassOf(ch, 38);
+      if (b === 0) {
+        if (sec === 2 && bar % 2) N(tr, 'wpad', t, voicing(ch, 50, 4), 16 * sd, 1, { rev: true, cut: 1800 });
+        else N(tr, 'wpad', t, voicing(ch, 50, 4), 16 * sd, [0.75, 0.9, 0.7, 1][sec], { att: sec === 2 ? 0.4 : 1.2, rel: 1.6, cut: [1000, 1300, 1600, 1500][sec] });
+        if (bar % 2 === 0) {
+          if (bar % 8 === 0) morph(tr, ['u', 'o', 'a', 'o'][sec], t, 3);
+          sing(tr, t, voicing(ch, 57, 3), 32 * sd - 0.1, { att: 2.2, rel: 2.5, level: [0.012, 0.016, 0.022, 0.02][sec] });
+        }
+        if (bar % 8 === 0) N(tr, 'tbell', t, rootOf(ch, 74), 0.32, 4.5);
+      }
+      if (bar % 8 === 7 && b === 8) N(tr, 'rswell', t, voicing(nx, 74, 3), 8 * sd, 0.9);
+      else if (sec === 2 && bar % 2 && b === 0) N(tr, 'rswell', t, [], 16 * sd, 0.6);
+      const SUB = sec === 2 ? [0, 8] : sec === 0 ? [0, 6] : [0, 6, 12], si = SUB.indexOf(b);
+      if (si >= 0) N(tr, 'sub', t, lo, ((SUB[si + 1] ?? 16) - b) * sd * 0.8, si ? 0.7 : 1);
+      const V = voicing(ch, 62, 6);
+      let ai = -1, vel = b % 4 === 0 ? 0.42 : 0.28;
+      if (sec === 0) { if (b % 2 === 0) ai = this.ARP8[b >> 1]; }
+      else if (sec === 1) { if (b % 2 === 0) ai = this.ARP8[((b >> 1) + bar) % 8]; else if (b === 7 || b === 15) ai = this.ARP16[b]; }
+      else if (sec === 2) { ai = this.TRI[s % 6]; vel = s % 3 === 0 ? 0.4 : 0.26; }
+      else ai = this.ARP16[b];
+      if (ai >= 0) N(tr, 'glass', t, V[ai % V.length] + (sec === 3 && odd ? 12 : 0), vel, 1.2, (b % 2 ? 0.55 : -0.55) * (bar % 2 ? -1 : 1));
+      const dr = this.DR[sec];
+      if (sec && bar % 8 === 7 && b >= 12) N(tr, 'hand', t, b % 2 ? 'tek' : 'dum', 0.4 + (b - 12) * 0.12);
+      else for (const k in dr) { const c = dr[k][b]; if (c !== '.') N(tr, 'hand', t + (b % 2 ? sd * 0.12 : 0), k, c === 'X' ? 1 : 0.6); }
+      if (!sec && odd && b === 14) N(tr, 'hand', t, 'tick', 0.6);
+      const e = ev(tr, 'mel', s);
+      if (e) {
+        const len = e.len * sd;
+        if (sec === 2) {
+          sing(tr, t, [e.m], len, { att: 0.15, rel: 0.8, level: 0.035 });
+          N(tr, 'glass', t, e.m, 0.5, Math.max(len * 1.5, 1.6));
+        } else N(tr, 'glass', t, e.m, 0.9, Math.max(len * 1.6, 1.8));
+        if (odd && sec !== 2) N(tr, 'whistle', t, e.m - 12, len * 0.95, 0.8);
+        if (sec === 3 && !odd) N(tr, 'glass', t + 0.004, e.m + 12, 0.3, 1.4, 0.4);
+      }
+    },
+  },
+
+  // Somnia, Mother of Moths: 7/8 (2+2+3) at 150 bpm, 16th grid, 40 bars (~56 s).
+  // Arpeggiated synth bass in 16ths, kick / snare / taiko 7/8 groove, a gated
+  // (pulsing) choir, a glassy FM lead through echo, swirling auto-panned pads.
+  // Dark to radiant: I wings (Phrygian D minor, motif) | II eyes (the theme)
+  // | III kaleidoscope (major-third mediants Dm Bbm F#m, toms, stuttered
+  // choir) | IV build (half time, filters opening, snare roll, reversed swell)
+  // | V radiance (D major / Lydian, open choir, bells; bVI bVII back home).
+  // Odd passes: glass bells double the lead an octave up, extra hats.
+  // I: Dm Dm Eb/D Dm Bb C Eb A | II: Dm Bb Gm A Dm Bb Eb A7 | III: Dm Bbm F#m Dm Bb Gb D A
+  // IV: Bb Bb Gm Gm Eb Eb Asus4 A | V: D E/D Bm F#m G A Bb C
+  somnia: {
+    bpm: 150, spb: 4, bpb: 14, bars: 40, gain: 0.55,
+    chords: ['Dm', 'Dm', 'Eb/D', 'Dm', 'Bb', 'C', 'Eb', 'A',
+      'Dm', 'Bb', 'Gm', 'A', 'Dm', 'Bb', 'Eb', 'A7',
+      'Dm', 'Bbm', 'F#m', 'Dm', 'Bb', 'Gb', 'D', 'A',
+      'Bb', 'Bb', 'Gm', 'Gm', 'Eb', 'Eb', 'Asus4', 'A',
+      'D', 'E/D', 'Bm', 'F#m', 'G', 'A', 'Bb', 'C'],
+    seqs: {
+      mel: [`. . . . . . . | . . . . . . . | G5 - Bb5 - Eb6 - - | D6 - - - - - - |
+             . . . . . . . | . . . . . . . | G5 - Bb5 - Eb6 - D6 | C#6 - - - E6 - - |
+             D5 - F5 - A5 - D6 | C6 - Bb5 - F5 - - | G5 - Bb5 - D6 - F6 | E6 - - - C#6 - A5 |
+             D6 - E6 - F6 - A6 | G6 - F6 - D6 - - | Eb6 - D6 - Bb5 - G5 | A5 - - - C#6 - E6 |
+             F6 - - - E6 D6 A5 | F6 - - - Db6 Bb5 F5 | C#6 - - - A5 F#5 C#5 | D5 - F5 - A5 - - |
+             D6 - - - F6 - D6 | Db6 - - - Bb5 - Gb5 | F#5 - A5 - D6 - F#6 | E6 - - - - - . |
+             D6 - - - - - - | F6 - - - - - - | Bb5 - - - - - - | D6 - - - - - - |
+             G6 - - - - - - | Bb6 - - - G6 - - | A6 - - - - - - | E6 - - - C#6 - E6 |
+             F#6 - - - A6 - F#6 | G#6 - - - E6 - B5 | D6 - - - F#6 - D6 | C#6 - - - A5 - F#5 |
+             B5 - - - D6 - G6 | A6 - - - E6 - C#6 | D6 - - - F6 - D6 | E6 - - - G6 - C6`, 2],
+    },
+    BASS: [0, 2, 1, 2, 0, 2, 1, 2, 0, 2, 1, 3, 1, 2],
+    DR: [
+      { kick: 'x.......x.x...', snare: '....x.......x.', shaker: 'x.x.x.x.x.x.x.' },
+      { kick: 'x.....x.x.x...', snare: '....x.......x.', tamb: 'x.x.x.x.x.x.x.', taiko: 'x...x...x.....' },
+      { kick: 'x.......x.....', snare: '....x.......x.', tom: '..x...x...x.x.', shaker: 'xxxxxxxxxxxxxx', taiko: 'x.......x.....' },
+      null,
+      { kick: 'x.....x.x.x...', snare: '....x.......x.', tamb: 'x.x.x.x.x.x.x.', taiko: 'x...x...x.....' },
+    ],
+    GATE: ['x.x.x.x.x.x.x.', 'xx.xxx.xxx.xx.', 'ssssssssssssss', null, 'xxxxxxxxxxxxxx'],
+    setup(tr) {
+      fxBus(tr, 'glead', { echo: tr.sd * 3, fb: 0.3, mix: 0.28, cut: 3500 });
+      fxBus(tr, 'glass', { echo: tr.sd * 3, fb: 0.3, mix: 0.3, cut: 3000 });
+      fxBus(tr, 'swirl', { wow: 0.0022, wowHz: 0.55 });
+      const [lvl, wet] = MIX.choir, co = tgain(tr, lvl, tr.dry);
+      co.connect(tgain(tr, wet, tr.wet));
+      tr.gate = tr.buses.choir = tgain(tr, 1, co);
+      makeChoir(tr, 'u', 1.05);
+    },
+    step(tr, P, t) {
+      const { s, bar, b, pass } = P, sd = tr.sd, ch = this.chords[bar], sec = (bar / 8) | 0, odd = pass % 2 === 1;
+      const c = chord(ch), r = rootOf(ch, 36), lo = bassOf(ch, 36), acc = b === 0 || b === 4 || b === 8;
+      const build = sec === 3, late = build && bar >= 28;
+      const G = build ? (late ? 'x.x.x.x.x.x.x.' : 'xxxxxxxxxxxxxx') : this.GATE[sec], gc = G[b];
+      tr.gate.gain.setTargetAtTime(gc === '.' ? 0.1 : 1, t, 0.006);
+      if (gc === 's') tr.gate.gain.setTargetAtTime(0.1, t + sd * 0.5, 0.006);
+      if (b === 0) {
+        sing(tr, t, voicing(ch, sec === 4 ? 62 : 55, 4), 14 * sd + 0.02, { att: 0.05, rel: 0.3, level: [0.035, 0.04, 0.04, 0.035, 0.045][sec] });
+        if (bar % 8 === 0) {
+          morph(tr, ['u', 'a', 'o', 'u', 'a'][sec], t, 0.4);
+          N(tr, 'perc', t, 'crash', 0.9);
+          N(tr, 'timp', t, rootOf(ch, 38), 0.9, 1.4);
+        } else if (sec === 4 && bar % 2 === 0) N(tr, 'perc', t, 'crash', 0.6);
+        const pb = build ? 0.5 + (bar - 24) * 0.15 : [0.55, 0.85, 1.1, 0, 1.5][sec];
+        N(tr, 'swirl', t, voicing(ch, 50, 4), 14 * sd, sec === 4 ? 1.1 : 0.9, pb, bar % 2 ? 1 : -1);
+        if (sec === 4 && bar % 2 === 0) N(tr, 'tbell', t, rootOf(ch, 74), 0.45, 3);
+        if (bar === 32) N(tr, 'bigbell', t, 50, 0.7, 6);
+      }
+      if (build && !late) {
+        if (b % 2 === 0) N(tr, 'arpb', t, lo, sd * 1.6, acc ? 1 : 0.7, 0.4 + (bar - 24) * 0.1);
+      } else {
+        const T = [lo, r + c.iv[2], r + 12, r + 12 + c.iv[1]];
+        N(tr, 'arpb', t, T[this.BASS[b]], sd * 0.9, acc ? 1 : 0.72, late ? 0.6 + (bar - 28) * 0.25 : [0.7, 1, 1.2, 0, 1.4][sec]);
+      }
+      if (build) {
+        if (b === 0) N(tr, 'perc', t, 'kick', 1);
+        if (b === 0 && bar % 2 === 0) N(tr, 'perc', t, 'taiko', 0.9);
+        if (!late && b === 8) N(tr, 'perc', t, 'snare', 0.6);
+        if (late) {
+          if (acc && b) N(tr, 'perc', t, 'kick', 0.9);
+          if (bar >= 30 || b % 2 === 0) N(tr, 'perc', t, 'snare', 0.25 + (((bar - 28) * 14 + b) / 56) * 0.7);
+        }
+        if (bar === 31 && b >= 8) N(tr, 'timp', t, 38, 0.3 + (b - 8) * 0.12, 0.4);
+      } else {
+        const dr = this.DR[sec];
+        if (bar % 4 === 3 && b >= 8) {
+          if (b !== 9) N(tr, 'perc', t, 'tom', 0.5 + (b - 8) * 0.08);
+          if (b === 8 || b === 12) N(tr, 'perc', t, 'kick', 0.8);
+        } else for (const k in dr) if (dr[k][b] === 'x') N(tr, 'perc', t, k, acc ? 1 : 0.7);
+        if (odd && sec !== 2 && b % 2 === 1) N(tr, 'perc', t, 'shaker', 0.4);
+      }
+      if (bar === 31 && b === 0) N(tr, 'rswell', t, voicing('D', 74, 3), 14 * sd, 1.2);
+      else if (bar % 8 === 7 && b === 6 && !build) N(tr, 'rswell', t, [], 8 * sd, 0.9);
+      const e = ev(tr, 'mel', s);
+      if (e) {
+        const len = e.len * sd;
+        N(tr, 'glead', t, e.m, sec === 0 ? 0.75 : 0.95, len * 0.95);
+        if (odd || sec === 4) N(tr, 'glass', t, e.m + 12, 0.35, Math.max(len, 0.8));
       }
     },
   },

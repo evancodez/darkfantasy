@@ -14,6 +14,7 @@ import { HUD, BTN } from './ui/hud.js';
 import { buildCastle } from './world/castle.js';
 import { setupDragon } from './actors/dragon.js';
 import { buildCarnival } from './world/carnival/carnival.js';
+import { buildDream } from './world/dream/dream.js';
 import audio from './sound.js';
 
 const params = new URLSearchParams(location.search);
@@ -118,6 +119,9 @@ buildCastle(game);
 setupDragon(game);
 hud.loading('Raising the Midnight Carnival…');
 buildCarnival(game);
+hud.loading('Dreaming the Mirror Sea…');
+await new Promise(r => setTimeout(r, 30));
+buildDream(game);
 for (const [k, z] of Object.entries(game.zones)) z.group.visible = k === 'outside';
 
 // the Star-Eater falls: a moon gate opens in the hoard, onward to the carnival
@@ -137,10 +141,26 @@ game.onFinalVictory = () => {
   setTimeout(() => audio.music('victory'), 2500);
   game.player.action = 'victory'; game.player.actionT = 0;
   setTimeout(() => {
-    const t = Math.round(game.time - game.startTime), mm = Math.floor(t / 60), ss = String(t % 60).padStart(2, '0');
-    hud.win(`Time ${mm}:${ss}<br>Star-motes ${game.motes}<br>Falls ${game.deaths}`, 'The Queen\u2019s strings are cut. The carnival sleeps beneath the stars.');
+    hud.win(statsLine(), 'The Queen\u2019s strings are cut. The carnival sleeps beneath the stars.', {
+      label: 'Continue: Book II \u00b7 The Mirror Sea \u25b8',
+      go: () => { hud.unwin(); game.won = false; game.cutscene = false; game.player.action = null; audio.play('dreamPortal'); game.enterDream(); input.lock(); },
+    });
     input.unlock();
   }, 4200);
+};
+const statsLine = () => {
+  const t = Math.round(game.time - game.startTime), mm = Math.floor(t / 60), ss = String(t % 60).padStart(2, '0');
+  return `Time ${mm}:${ss}<br>Star-motes ${game.motes}<br>Falls ${game.deaths}`;
+};
+// Somnia dissolves into light: the end of Book II
+game.onDreamVictory = () => {
+  game.won = true; game.cutscene = true;
+  audio.play('victory');
+  setTimeout(() => audio.music('victory'), 2500);
+  game.player.action = 'victory'; game.player.actionT = 0; game.player.cam.focus = null;
+  game.flash(0.8, 0xffe0ff);
+  setTimeout(() => hud.callout('The dream is still.'), 900);
+  setTimeout(() => { hud.win(statsLine(), 'Somnia sleeps. The Dreamer smiles, closes its eyes, and the Mirror Sea lies still.'); input.unlock(); }, 4600);
 };
 
 // ------------------------------------------------------------- input / screens
@@ -184,10 +204,17 @@ hud.onStart = begin;
 game.startAt = (ch) => {
   if (!game.started) begin();
   if (game.paused) togglePause(false);
+  if (game.won) { hud.unwin(); game.won = false; game.cutscene = false; game.player.action = null; }
   audio.play('confirm');
   for (const t of game.introTimers || []) clearTimeout(t);
   hud.hint(null); hud.prompt(null);
   if (ch === 'grounds') { if (game.zone !== 'outside') game.enterZone('outside', SPAWN, Math.PI); else game.player.teleport(SPAWN, Math.PI); game.setCheckpoint(SPAWN, Math.PI); return; }
+  if (ch === 'dream' || ch === 'somnia') {
+    game.enterDream();
+    if (ch === 'somnia') game.zones.dream.skipTo('somnia');
+    R.post.uFade.value = 1;
+    return;
+  }
   game.sigils = 3;
   if (ch === 'carnival' || ch === 'queen') {
     game.enterFair();
@@ -204,6 +231,7 @@ hud.onResume = () => togglePause(false);
 // gamepad: OPTIONS pauses; on the title and pause screens the d-pad or left
 // stick walks a highlight over the chapters, Cross picks, Circle backs out
 function padMenus() {
+  if (game.won && hud.onNext && input.anyPressed('PadCross', 'PadOptions')) { input.consume('PadCross', 'PadOptions'); hud.onNext(); return; }
   if (game.started && !game.paused && !game.won && input.anyPressed('PadOptions')) { togglePause(true); return; }
   const scr = !game.started ? (hud.ready && !hud.titleS.classList.contains('hidden') ? hud.titleS : null) : game.paused ? hud.pauseS : null;
   if (!scr) return;
