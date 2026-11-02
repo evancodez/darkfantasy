@@ -96,10 +96,22 @@ const S1 = { spine: [0.18, 0.9, 0], shoulderR: [-1.4, 0, 0.75], elbowR: [-0.1, 0
 const W2 = { spine: [0.12, 0.75, 0], shoulderR: [-1.35, 0, 0.7], elbowR: [-0.35, 0, 0], handR: [0, 1.45, 0], shoulderL: [-0.3, 0, 0.5], legL: [0.3, 0, 0.1], kneeL: [0.3, 0, 0], legR: [-0.45, 0, -0.1], kneeR: [0.35, 0, 0] };
 const S2 = { spine: [0.18, -0.95, 0], shoulderR: [-1.35, 0, -1.1], elbowR: [-0.1, 0, 0], handR: [0, 1.45, 0], shoulderL: [-0.25, 0, 0.7], legL: [0.35, 0, 0.1], kneeL: [0.4, 0, 0], legR: [-0.5, 0, -0.1], kneeR: [0.45, 0, 0] };
 const SPIN = { spine: [0.25, 0, 0], shoulderR: [-1.5, 0, -1.35], elbowR: [0, 0, 0], handR: [0, -1.5, 0], shoulderL: [-0.5, 0, 1.2], legL: [-0.5, 0, 0.3], kneeL: [0.7, 0, 0], legR: [0.4, 0, -0.3], kneeR: [0.6, 0, 0] };
+// heavy: the sword hauled back over the shoulder, then a full turn
+const HW = { spine: [0.22, 1.05, 0], head: [0.05, -0.6, 0], shoulderR: [-1.7, 0, 0.95], elbowR: [-0.7, 0, 0], handR: [0, -1.45, 0], shoulderL: [-0.45, 0, 0.75], elbowL: [-0.6, 0, 0], legL: [-0.55, 0, 0.22], kneeL: [0.85, 0, 0], legR: [0.5, 0, -0.22], kneeR: [0.75, 0, 0] };
+// mid-air slashes: the same swings with the knees tucked up
+const TUCKED = { legL: [-1.05, 0, 0.12], kneeL: [1.5, 0, 0], footL: [0.25, 0, 0], legR: [-0.3, 0, -0.1], kneeR: [1.1, 0, 0], footR: [0.2, 0, 0] };
+const TUCKED2 = { legL: [-0.3, 0, 0.1], kneeL: [1.1, 0, 0], footL: [0.2, 0, 0], legR: [-1.05, 0, -0.12], kneeR: [1.5, 0, 0], footR: [0.25, 0, 0] };
+const AW1 = { ...W1, ...TUCKED, spine: [0.25, -0.9, 0] }, AS1 = { ...S1, ...TUCKED, spine: [0.32, 0.95, 0.08] };
+const AW2 = { ...W2, ...TUCKED2, spine: [0.25, 0.8, 0] }, AS2 = { ...S2, ...TUCKED2, spine: [0.32, -1.0, -0.08] };
+const ASPIN = { ...SPIN, legL: [-1.3, 0, 0.25], kneeL: [1.9, 0, 0], legR: [-1.1, 0, -0.25], kneeR: [1.8, 0, 0], spine: [0.35, 0, 0] };
 export const ATTACKS = {
   atk1: { dur: 0.34, hit: [0.07, 0.17], keys: [[0, W1], [0.06, W1], [0.15, S1], [0.34, mixPose(S1, IDLE, 0.4)]] },
   atk2: { dur: 0.34, hit: [0.07, 0.17], keys: [[0, W2], [0.06, W2], [0.15, S2], [0.34, mixPose(S2, IDLE, 0.4)]] },
-  atk3: { dur: 0.52, hit: [0.08, 0.36], keys: [[0, SPIN], [0.4, SPIN], [0.52, mixPose(SPIN, IDLE, 0.5)]] },
+  atk3: { spin: true, dur: 0.52, hit: [0.08, 0.36], keys: [[0, SPIN], [0.4, SPIN], [0.52, mixPose(SPIN, IDLE, 0.5)]] },
+  heavy: { spin: true, dur: 0.64, hit: [0.17, 0.46], keys: [[0, mixPose(IDLE, HW, 0.6)], [0.13, HW], [0.2, SPIN], [0.5, SPIN], [0.64, mixPose(SPIN, IDLE, 0.5)]] },
+  air1: { air: true, dur: 0.3, hit: [0.05, 0.15], keys: [[0, AW1], [0.04, AW1], [0.13, AS1], [0.3, mixPose(AS1, AIR_DOWN, 0.45)]] },
+  air2: { air: true, dur: 0.3, hit: [0.05, 0.15], keys: [[0, AW2], [0.04, AW2], [0.13, AS2], [0.3, mixPose(AS2, AIR_DOWN, 0.45)]] },
+  air3: { air: true, spin: true, dur: 0.44, hit: [0.05, 0.3], keys: [[0, ASPIN], [0.34, ASPIN], [0.44, mixPose(ASPIN, AIR_DOWN, 0.5)]] },
 };
 
 // ----------------------------------------------------------------- model
@@ -227,7 +239,8 @@ export function buildHero() {
     const act = s.action, at = s.actionT || 0;
     let flipTarget = 0, spinTarget = 0;
     if (act && ATTACKS[act]) { pose = mixPose(pose, sampleKeys(ATTACKS[act].keys, at), 1); k = 1 - Math.exp(-dt * 40); }
-    if (act === 'atk3') spinTarget = -PI * 2 * THREE.MathUtils.smoothstep(at, 0.04, 0.36);
+    if (act === 'atk3' || act === 'air3') spinTarget = -PI * 2 * THREE.MathUtils.smoothstep(at, 0.04, act === 'air3' ? 0.3 : 0.36);
+    if (act === 'heavy') spinTarget = -PI * 2 * THREE.MathUtils.smoothstep(at, 0.16, 0.48);
     if (act === 'flip') { pose = mixPose(pose, TUCK, Math.min(1, at * 8)); flipTarget = PI * 2 * THREE.MathUtils.smoothstep(at, 0, 0.42); k = 1 - Math.exp(-dt * 30); }
     if (act === 'plunge') { pose = mixPose(pose, at < 0.14 ? TUCK : PLUNGE, 1); flipTarget = at < 0.14 ? PI * 2 * (at / 0.14) * 0.5 : 0; k = 1 - Math.exp(-dt * 30); }
     if (act === 'plungeLand') { pose = mixPose(PLUNGE, { legL: [-1.2, 0, 0.3], kneeL: [2.0, 0, 0], legR: [0.2, 0, -0.3], kneeR: [1.6, 0, 0], spine: [0.5, 0, 0] }, 1); k = 1; }

@@ -1,8 +1,9 @@
 // Player controller + follow camera. Tuned for an arcade feel: quick
 // acceleration, heavy gravity with a short hop when Jump is released early,
 // coyote time and jump buffering, a somersault double jump, a three-hit combo,
-// a mid-air plunge, head-stomps that refresh the double jump, and a shield
-// whose first moments are a parry.
+// a heavy spin, mid-air slashes that hang you in the air, a smash-down plunge,
+// head-stomps that refresh the double jump, and a shield whose first moments
+// are a parry. Keyboard + mouse and gamepads drive the same actions.
 import * as THREE from 'three';
 import { createCharacter, raycast } from '../core/physics.js';
 import { input } from '../core/input.js';
@@ -12,6 +13,15 @@ import audio from '../sound.js';
 const UP = new THREE.Vector3(0, 1, 0);
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3();
 const angDiff = (a, b) => { let d = b - a; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return d; };
+
+// every action and the keys / pad buttons that trigger it
+export const BIND = {
+  jump: ['Space', 'PadCross'],
+  attack: ['Mouse0', 'KeyJ', 'KeyF', 'PadSquare'],
+  heavy: ['KeyC', 'KeyL', 'Mouse1', 'PadTriangle'],
+  guard: ['Mouse2', 'KeyK', 'ShiftLeft', 'ShiftRight', 'PadL1', 'PadL2'],
+  recenter: ['KeyR', 'PadR3', 'PadR1'],
+};
 
 export const TUNE = {
   speed: 7.4, guardSpeed: 2.4, accel: 62, decel: 46, airAccel: 30,
@@ -111,20 +121,26 @@ export class Player {
     // --- input → wish direction (camera relative)
     let ix = 0, iz = 0;
     if (ctrl) {
-      if (input.any('KeyW', 'ArrowUp')) iz += 1;
-      if (input.any('KeyS', 'ArrowDown')) iz -= 1;
-      if (input.any('KeyA', 'ArrowLeft')) ix -= 1;
-      if (input.any('KeyD', 'ArrowRight')) ix += 1;
+      if (input.any('KeyW', 'ArrowUp', 'PadUp')) iz += 1;
+      if (input.any('KeyS', 'ArrowDown', 'PadDown')) iz -= 1;
+      if (input.any('KeyA', 'ArrowLeft', 'PadLeft')) ix -= 1;
+      if (input.any('KeyD', 'ArrowRight', 'PadRight')) ix += 1;
+      // left stick is analog: a light tilt walks, most of the throw runs
+      const st = input.stick();
+      if (st.lx || st.ly) { ix += st.lx; iz -= st.ly; }
     }
     const cy = this.cam.yaw;
     const wish = (this._wish ||= new THREE.Vector3()).set(-Math.sin(cy) * iz + Math.cos(cy) * ix, 0, -Math.cos(cy) * iz - Math.sin(cy) * ix);
     const mag = Math.min(1, wish.length());
     if (mag > 0) wish.normalize();
 
-    const jumpPressed = ctrl && input.anyPressed('Space');
-    this.jumpHeld = ctrl && input.any('Space');
-    const atkPressed = ctrl && input.anyPressed('Mouse0', 'KeyJ', 'KeyF');
-    const guardHeld = ctrl && input.any('Mouse2', 'KeyK', 'ShiftLeft', 'ShiftRight');
+    const jumpPressed = ctrl && input.anyPressed(...BIND.jump);
+    this.jumpHeld = ctrl && input.any(...BIND.jump);
+    const atkPressed = ctrl && input.anyPressed(...BIND.attack);
+    const heavyPressed = ctrl && input.anyPressed(...BIND.heavy);
+    const guardHeld = ctrl && input.any(...BIND.guard);
+    // properly off the ground (not a one-frame flicker on a step)
+    const airborne = !this.grounded && (this.airTime > 0.08 || this.vel.y > 1);
 
     // --- guard
     const busy = this.action && this.action !== 'flip';
@@ -137,13 +153,23 @@ export class Player {
     } else this.guard = 0;
     this.guardT += dt;
 
-    // --- attacks
-    if (atkPressed) {
-      if (!this.grounded && this.action !== 'plunge' && this.action !== 'hurt') this.startPlunge();
-      else if (this.grounded && (!this.action || this.action === 'flip')) this.startAttack('atk1');
+    // --- attacks: the sword slashes wherever you are; heavy is a spin on the
+    // ground and a smash-down plunge in the air
+    const free = !this.action || this.action === 'flip';
+    if (heavyPressed && this.action !== 'hurt' && this.action !== 'plunge' && this.action !== 'plungeLand') {
+      if (airborne) this.startPlunge();
+      else if (free || (ATTACKS[this.action] && !ATTACKS[this.action].spin && this.actionT > ATTACKS[this.action].hit[1])) this.startAttack('heavy');
+    } else if (atkPressed) {
+      if (airborne) {
+        if (free) { if (this.airHits < 3) this.startAttack('air1'); }
+        else if (this.action === 'air1' && this.actionT > 0.07) this.queued = 'air2';
+        else if (this.action === 'air2' && this.actionT > 0.07) this.queued = 'air3';
+      }
+      else if (free) this.startAttack('atk1');
       else if (this.action === 'atk1' && this.actionT > 0.08) this.queued = 'atk2';
       else if (this.action === 'atk2' && this.actionT > 0.08) this.queued = 'atk3';
     }
+    if (this.action === 'heavy' && this.actionT < 0.16 && Math.random() < 0.5) g.fx.twinkle(this.hero.swordTip(_a), 0xc8dcff, 0.6);
     if (this.action && ATTACKS[this.action]) {
       const A = ATTACKS[this.action];
       if (this.queued && this.actionT > A.hit[1] + 0.02) { const q = this.queued; this.queued = null; this.startAttack(q); }
@@ -155,14 +181,17 @@ export class Player {
 
     // --- horizontal movement
     const attacking = this.action && ATTACKS[this.action];
+    const airAtk = attacking && attacking.air;
     let maxS = t.speed * mag;
     if (this.guard) maxS = t.guardSpeed * mag;
-    if (attacking || this.action === 'plungeLand' || this.action === 'hurt') maxS = 0;
+    if ((attacking && !airAtk) || this.action === 'plungeLand' || this.action === 'hurt') maxS = 0;
+    if (airAtk) maxS = t.speed * mag * 0.7;
     const tx = wish.x * maxS, tz = wish.z * maxS;
     // in the air, letting go brakes gently (so platform momentum carries you a bit)
     let acc = this.grounded ? (maxS > 0.1 ? t.accel : t.decel) : (mag > 0.1 ? t.airAccel : 9);
     if (this.action === 'hurt') acc = 4;
     if (attacking && this.grounded) acc = 22;
+    if (airAtk) acc = 16;
     if (this.action === 'plunge' || this.ballistic) acc = 0;
     const dx = tx - this.vel.x, dz = tz - this.vel.z, dl = Math.hypot(dx, dz);
     if (dl > 0) { const s = Math.min(dl, acc * dt) / dl; this.vel.x += dx * s; this.vel.z += dz * s; }
@@ -181,7 +210,7 @@ export class Player {
     }
 
     // --- vertical
-    if (this.grounded) { this.coyote = t.coyote; this.jumps = 0; } else this.coyote -= dt;
+    if (this.grounded) { this.coyote = t.coyote; this.jumps = 0; this.airHits = 0; } else this.coyote -= dt;
     this.jumpBuf = jumpPressed ? t.buffer : this.jumpBuf - dt;
     if (this.jumpBuf > 0 && ctrl && this.action !== 'plunge' && this.action !== 'plungeLand' && this.action !== 'hurt') {
       if (this.coyote > 0) {
@@ -209,6 +238,8 @@ export class Player {
       if (this.actionT < 0.16) { this.vel.y = Math.max(this.vel.y * 0.5, 0.5); grav = 0; }
       else { this.vel.y = -34; grav = 0; }
     }
+    // slashing in mid-air hangs you there a moment
+    if (airAtk && this.vel.y < 0) { grav *= 0.3; this.vel.y = Math.max(this.vel.y, -5); }
     this.vel.y = Math.max(-t.maxFall - (this.action === 'plunge' ? 6 : 0) - (this.ballistic ? 60 : 0), this.vel.y - grav * dt);
 
     // --- moving platforms: carry the rider exactly (slide + spin) ourselves
@@ -256,7 +287,7 @@ export class Player {
       this.landed = fall;
       if (this.action === 'plunge') this.plungeImpact();
       else if (fall > 6) { audio.play('land', { volume: Math.min(1, fall / 20) }); g.fx.puff(this.pos, 7, 0x5a5a90, 0.5); }
-      if (this.action === 'flip') this.action = null;
+      if (this.action === 'flip' || airAtk) { this.action = null; this.queued = null; }
     }
     if (!this.grounded) this.airTime += dt; else this.airTime = 0;
 
@@ -269,7 +300,7 @@ export class Player {
         if (hd < e.radius + 0.35 && this.pos.y < top + 0.35 && this.pos.y > top - 0.7) {
           const plunging = this.action === 'plunge';
           e.onStomp?.(this, plunging ? 2 : 1);
-          this.vel.y = this.jumpHeld ? 14 : 10; this.jumps = 0;
+          this.vel.y = this.jumpHeld ? 14 : 10; this.jumps = 0; this.airHits = 0;
           if (plunging) { this.action = null; this.plungeImpact(true); }
           audio.play('bounce', { volume: 0.7 });
           g.fx.rings.add(_b.copy(this.pos), { color: 0xffe080, r0: 0.3, r1: 1.4, life: 0.25 });
@@ -280,9 +311,9 @@ export class Player {
     }
 
     // --- melee
-    if (attacking) {
+    if (this.action && ATTACKS[this.action]) {
       const A = ATTACKS[this.action];
-      if (this.actionT >= A.hit[0] && this.actionT <= A.hit[1]) this.meleeScan(this.action === 'atk3');
+      if (this.actionT >= A.hit[0] && this.actionT <= A.hit[1]) this.meleeScan(A.spin, A.air);
     }
 
     // --- safe ground & falling out of the world
@@ -318,7 +349,8 @@ export class Player {
     if (this.guard && this.guardT < t.parry && Math.random() < 0.6) g.fx.twinkle(this.hero.shield.getWorldPosition(_a), 0xfff0a0, 0.7);
     // sword trail + flame glow + carried light
     const tip = this.hero.swordTip(_b), base = this.hero.swordBase(_c);
-    this.trail.update(dt, !!attacking && this.actionT < ATTACKS[this.action].hit[1] + 0.05 || this.action === 'plunge', base, tip);
+    const A = this.action && ATTACKS[this.action];
+    this.trail.update(dt, !!A && this.actionT < A.hit[1] + 0.05 || this.action === 'plunge', base, tip);
     const fw = this.hero.flameWorld(_a);
     const hpk = this.hp / this.maxHp;
     g.glows.set(this.flameGlow, fw.setY(fw.y + 0.1), hpk > 0.34 ? 0x5a90ff : 0xff7a40, (0.9 + hpk * 0.9) * (this.root.visible ? 1 : 0));
@@ -356,13 +388,14 @@ export class Player {
 
   startAttack(name) {
     this.action = name; this.actionT = 0; this.hitSet.clear(); this.guard = 0;
-    // auto-aim: snap toward the best target in front
+    const air = ATTACKS[name].air;
+    // auto-aim: snap toward the best target in front (in the air, above and below too)
     const g = this.game;
     let best = null, bs = 1e9;
     for (const e of g.targets) {
       if (!e.alive || e.noAim) continue;
       _a.copy(e.pos).sub(this.pos); const d = Math.hypot(_a.x, _a.z);
-      if (d > 4.2 || Math.abs(_a.y) > 2.5) continue;
+      if (d > (air ? 4.6 : 4.2) || _a.y > (air ? 3.2 : 2.5) || _a.y < -(air ? 3.5 : 2.5) - (e.height || 0) * 0.5) continue;
       const ang = Math.abs(angDiff(this.yaw, Math.atan2(_a.x, _a.z)));
       if (ang > 1.9) continue;
       const score = d + ang * 1.5;
@@ -370,9 +403,20 @@ export class Player {
     }
     if (best) this.yaw = Math.atan2(best.pos.x - this.pos.x, best.pos.z - this.pos.z);
     const f = this.forward;
-    const lunge = name === 'atk3' ? 4 : 3;
+    if (air) {
+      // keep most of the jump's drift, nudge toward the target, and hop up a touch
+      this.airHits = (this.airHits || 0) + 1;
+      this.vel.x = this.vel.x * 0.55 + f.x * 2.4; this.vel.z = this.vel.z * 0.55 + f.z * 2.4;
+      this.vel.y = Math.max(this.vel.y, name === 'air1' ? 3.4 : 1.8);
+      this.noCut = true;
+      audio.play(name === 'air3' ? 'spin' : 'airSlash', { pitch: name === 'air2' ? 1.15 : 1 });
+      if (name !== 'air3') audio.play('slash1', { volume: 0.35, pitch: name === 'air2' ? 1.3 : 1.15 });
+      return;
+    }
+    const lunge = name === 'atk3' ? 4 : name === 'heavy' ? 3.6 : 3;
     this.vel.x = f.x * lunge; this.vel.z = f.z * lunge;
-    audio.play(name === 'atk3' ? 'spin' : name === 'atk2' ? 'slash2' : 'slash1');
+    audio.play(name === 'atk3' ? 'spin' : name === 'atk2' ? 'slash2' : name === 'heavy' ? 'plungeStart' : 'slash1');
+    if (name === 'heavy') setTimeout(() => this.action === 'heavy' && audio.play('spin', { pitch: 0.9 }), 150);
   }
 
   startPlunge() {
@@ -397,22 +441,26 @@ export class Player {
     g.onPlunge?.(this.pos);
   }
 
-  meleeScan(spin) {
+  meleeScan(spin, air) {
     const g = this.game, f = this.forward;
     for (const e of g.targets) {
       if (!e.alive || this.hitSet.has(e)) continue;
       _a.copy(e.pos).sub(this.pos);
       const dy = _a.y; _a.y = 0;
       const d = _a.length();
-      const reach = (spin ? 2.6 : 2.3) + e.radius;
-      if (d > reach || dy > 2.2 || dy < -1.6 - e.height) continue;
+      const reach = (spin ? 2.6 : 2.3) + (air ? 0.2 : 0) + e.radius;
+      if (d > reach || dy > (air ? 2.6 : 2.2) || dy < (air ? -2.2 : -1.6) - e.height) continue;
       if (!spin && d > 0.5 && _a.normalize().dot(f) < 0.25) continue;
       this.hitSet.add(e);
       const dir = d > 0.01 ? _a.clone().normalize() : f.clone();
       const res = e.onHit?.({ dmg: spin ? 2 : 1, from: this.pos, kind: 'sword', dir, player: this });
       const hp = _b.copy(e.pos).setY(e.pos.y + Math.min(1.2, e.height * 0.6)).addScaledVector(dir, -e.radius * 0.6);
       if (res === 'blocked') { g.fx.sparks(hp, 10, 0xc0d0ff, 5); audio.play('knightClang'); g.hitstop(0.05); this.vel.addScaledVector(dir, -5); }
-      else if (res !== 'ignored') { g.fx.hit(hp); g.hitstop(e.big ? 0.07 : 0.055); g.shake(0.18); }
+      else if (res !== 'ignored') {
+        g.fx.hit(hp); g.hitstop(e.big ? 0.07 : 0.055); g.shake(0.18);
+        // connecting in the air keeps you up there for the next swing
+        if (air) this.vel.y = Math.max(this.vel.y, 3.2);
+      }
     }
   }
 
@@ -421,15 +469,23 @@ export class Player {
     const c = this.cam, g = this.game;
     const [mx, my] = input.mouse();
     const wheel = input.wheel();
-    // the mouse always wins; automatic framing only eases in after you let go
-    if (mx || my || wheel) c.idle = 0; else c.idle += dt;
-    c.yaw -= mx * 0.0026; c.pitch = THREE.MathUtils.clamp(c.pitch + my * 0.002, -0.3, 1.25);
+    const ease = (k) => 1 - Math.exp(-dt * k);
+    // right stick: a response curve for fine aim, eased so turns start and stop smoothly
+    const st = input.stick(), curve = (v) => Math.sign(v) * Math.abs(v) ** 1.6;
+    c.padYaw = (c.padYaw || 0) + (curve(st.rx) * 3.3 - (c.padYaw || 0)) * ease(14);
+    c.padPitch = (c.padPitch || 0) + (curve(st.ry) * 1.9 - (c.padPitch || 0)) * ease(14);
+    const padCam = Math.abs(c.padYaw) + Math.abs(c.padPitch) > 0.02;
+    // you always win; automatic framing only eases in after you let go
+    if (mx || my || wheel || padCam) { c.idle = 0; c.recenter = 0; } else c.idle += dt;
+    c.yaw -= mx * 0.0026 + c.padYaw * dt; c.pitch = THREE.MathUtils.clamp(c.pitch + my * 0.002 + c.padPitch * dt, -0.3, 1.25);
+    // snap round behind Wick
+    if (input.anyPressed(...BIND.recenter) && !this.dead) c.recenter = 0.4;
+    if (c.recenter > 0) { c.recenter -= dt; c.yaw += angDiff(c.yaw, this.yaw + Math.PI) * ease(12); c.pitch += (0.3 - c.pitch) * ease(8); c.idle = 0; }
     if (wheel) c.zoom = THREE.MathUtils.clamp((c.zoom ?? 1) + wheel * 0.0012, 0.6, 1.7);
     if (input.any('KeyQ')) { c.yaw += 2.4 * dt; c.idle = 0; }
     if (input.any('KeyE')) { c.yaw -= 2.4 * dt; c.idle = 0; }
     const hs = Math.hypot(this.vel.x, this.vel.z);
     const hint = !c.focus && g.zones[g.zone]?.camHint?.(this.pos, c);
-    const ease = (k) => 1 - Math.exp(-dt * k);
     if (hint) {
       // level-authored framing (inside the spire: from the middle, looking out)
       if (c.idle > 1.2) { c.yaw += angDiff(c.yaw, hint.yaw) * ease(1.8); c.pitch += (hint.pitch - c.pitch) * ease(1.5); }

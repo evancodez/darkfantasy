@@ -64,6 +64,26 @@ const SPR = {
   ticket: sprite(TICKET, { x: '#8a4a08', r: '#c0206a' }), ticketE: sprite(TICKET, { x: '#3a2a4a', y: '#2a1c3a', Y: '#1a1028', W: '#4a3a5a', r: '#3a2a4a' }),
 };
 
+// chapter select: two books, each a row of buttons
+export const BOOKS = [
+  { name: 'BOOK I · GRIMHOLD', ch: [['grounds', 'The Grounds'], ['hall', 'The Hall'], ['spire', 'The Spire'], ['gate', 'The Demon Gate'], ['dragon', 'The Dragon'], ['carnival', 'The Moon Carnival'], ['queen', 'The Puppet Queen']] },
+];
+const chapterHTML = () => BOOKS.map(b => `<div class="chl">${b.name}</div>` + b.ch.map(([id, n], i) => `<button data-ch="${id}">${i + 1} · ${n}</button>`).join('')).join('');
+// control hints for keyboard + mouse and for a PS5 pad (any pad: same positions)
+const ps = (k) => ({ x: '<i class="ps x">\u2715</i>', o: '<i class="ps o">\u25CB</i>', s: '<i class="ps s">\u25A1</i>', t: '<i class="ps t">\u25B3</i>' }[k] || `<i class="ps sh">${k}</i>`);
+const CTL = {
+  kbm: ['<b>WASD</b> move', '<b>MOUSE</b> or <b>Q / E</b> camera · <b>R</b> recentre', '<b>SPACE</b> jump · again to flip',
+    '<b>CLICK</b> sword · slashes in mid-air too', '<b>C</b> or <b>MIDDLE CLICK</b> spin · in mid-air: SMASH DOWN', '<b>RIGHT CLICK / SHIFT</b> shield · tap just before a hit to PARRY'],
+  pad: ['<b>LEFT STICK</b> move', `<b>RIGHT STICK</b> camera · ${ps('R1')} recentre`, `${ps('x')} jump · again to flip`,
+    `${ps('s')} sword · slashes in mid-air too`, `${ps('t')} spin · in mid-air: SMASH DOWN`, `${ps('L1')} shield · tap just before a hit to PARRY`],
+};
+const ctlHTML = () => `<div class="ctl kbm">${CTL.kbm.map(c => `<span>${c}</span>`).join('')}</div><div class="ctl pad">${CTL.pad.map(c => `<span>${c}</span>`).join('')}</div>`;
+// short button names for in-game hints
+export const BTN = {
+  kbm: { attack: 'CLICK', heavy: 'C', jump: 'SPACE', guard: 'RIGHT CLICK', smash: 'C' },
+  pad: { attack: '\u25A1', heavy: '\u25B3', jump: '\u2715', guard: 'L1', smash: '\u25B3' },
+};
+
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, parent, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html; parent?.appendChild(e); return e; };
 
@@ -90,18 +110,14 @@ export class HUD {
     this.titleS = el('div', 'screen title hidden', scr, `
       <div class="logo">Grimhold</div>
       <div class="tag">~ the Candle Knight ~</div>
-      <div class="press">PRESS START</div>
-      <div class="chapters"><div class="chl">CHAPTERS</div>
-        <button data-ch="grounds">1 · The Grounds</button><button data-ch="hall">2 · The Hall</button><button data-ch="spire">3 · The Spire</button><button data-ch="gate">4 · The Demon Gate</button><button data-ch="dragon">5 · The Dragon</button><button data-ch="carnival">6 · The Moon Carnival</button><button data-ch="queen">7 · The Puppet Queen</button></div>
-      <div class="ctl">
-        <span><b>WASD</b> move</span><span><b>MOUSE</b> camera</span><span><b>SPACE</b> jump · again to flip</span>
-        <span><b>CLICK</b> sword · in air: plunge</span><span><b>RIGHT CLICK / SHIFT</b> shield · tap just before a hit to PARRY</span><span><b>Q / E</b> turn camera</span>
-      </div>`);
+      <div class="press"><span class="kbm">PRESS START</span><span class="pad">PRESS ${ps('x')} TO START</span></div>
+      <div class="chapters">${chapterHTML()}</div>
+      ${ctlHTML()}`);
     this.titleS.addEventListener('click', (e) => { const ch = e.target.closest('[data-ch]')?.dataset.ch; if (ch) this.onChapter?.(ch); else if (!e.target.closest('.chapters')) this.onStart?.(); });
     this.loadS = el('div', 'screen loading hidden', scr, '<div class="ltxt"></div>');
-    this.pauseS = el('div', 'screen pause hidden', scr, `<div class="ptitle">Paused</div><div class="press small">CLICK TO CONTINUE</div><div class="chapters small"><div class="chl">CHAPTERS</div>
-        <button data-ch="grounds">1 · The Grounds</button><button data-ch="hall">2 · The Hall</button><button data-ch="spire">3 · The Spire</button><button data-ch="gate">4 · The Demon Gate</button><button data-ch="dragon">5 · The Dragon</button><button data-ch="carnival">6 · The Moon Carnival</button><button data-ch="queen">7 · The Puppet Queen</button></div>
-      <div class="ctl"><span><b>WASD</b> move</span><span><b>SPACE</b> jump / flip</span><span><b>CLICK</b> sword</span><span><b>AIR + CLICK</b> plunge</span><span><b>RIGHT CLICK / SHIFT</b> shield &amp; parry</span><span><b>Q / E</b> camera</span></div>`);
+    this.pauseS = el('div', 'screen pause hidden', scr, `<div class="ptitle">Paused</div><div class="press small"><span class="kbm">CLICK TO CONTINUE</span><span class="pad">${ps('x')} OR OPTIONS TO CONTINUE</span></div>
+      <div class="chapters small">${chapterHTML()}</div>
+      ${ctlHTML()}`);
     this.pauseS.addEventListener('click', (e) => { const ch = e.target.closest('[data-ch]')?.dataset.ch; if (ch) this.onChapter?.(ch); else if (!e.target.closest('.chapters')) this.onResume?.(); });
     this.deathS = el('div', 'screen death hidden', scr, '<div class="dtitle">Your Flame Goes Out</div><div class="dsub">…but a candle can be lit again</div>');
     this.winS = el('div', 'screen win hidden', scr, '<div class="logo small">Victory</div><div class="tag">The Star-Eater is slain. Grimhold sleeps.</div><div class="stats"></div><div class="press">THANK YOU FOR PLAYING</div>');
@@ -109,6 +125,31 @@ export class HUD {
     this.ready = false;
     this.lastHp = -1; this.lastMax = -1; this.lastMotes = -1; this.lastSig = -1;
   }
+  // which control hints to show: 'kbm' or 'pad'
+  setDevice(d) { document.body.classList.toggle('pad', d === 'pad'); }
+  // gamepad menus: move a highlight across the chapter buttons by screen position
+  menuButtons(scr) { return [...scr.querySelectorAll('[data-ch]')]; }
+  menuMove(scr, dx, dy) {
+    const bs = this.menuButtons(scr);
+    if (!bs.length) return false;
+    const cur = bs.find(b => b.classList.contains('focus'));
+    if (!cur) { this.menuFocus(scr, bs[0]); return true; }
+    const r0 = cur.getBoundingClientRect(), c0 = [r0.left + r0.width / 2, r0.top + r0.height / 2];
+    let best = null, bd = 1e9;
+    for (const b of bs) {
+      if (b === cur) continue;
+      const r = b.getBoundingClientRect(), vx = r.left + r.width / 2 - c0[0], vy = r.top + r.height / 2 - c0[1];
+      const along = vx * dx + vy * dy, across = Math.abs(vx * dy - vy * dx);
+      if (along <= 4) continue;
+      const d = along + across * 3;
+      if (d < bd) { bd = d; best = b; }
+    }
+    if (!best && dx) best = bs[(bs.indexOf(cur) + dx + bs.length) % bs.length];
+    if (best) this.menuFocus(scr, best);
+    return !!best;
+  }
+  menuFocus(scr, b) { for (const x of this.menuButtons(scr)) x.classList.toggle('focus', x === b); }
+  menuFocused(scr) { return this.menuButtons(scr).find(b => b.classList.contains('focus')) || null; }
   loading(text) { this.loadS.classList.toggle('hidden', !text); if (text) this.loadS.querySelector('.ltxt').textContent = text; }
   title(on) { this.titleS.classList.toggle('hidden', !on); this.ready = on || this.ready; }
   show(on) { this.root.classList.toggle('hidden', !on); }

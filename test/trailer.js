@@ -160,7 +160,7 @@ function clips() {
         yield* wait(14);
         const sk = () => nearest('skull', 16)?.pos;
         if (sk()) yield* jump(() => sk() || p.pos, { flip: false, maxF: 10 });
-        for (let i = 0; i < 25 && !p.grounded; i++) yield i === 4 ? ['Mouse0'] : [];
+        for (let i = 0; i < 25 && !p.grounded; i++) yield i === 4 ? ['KeyC'] : [];
         yield* attack(sk, 50);
       } },
     { name: 'witch', dur: 4.0, setup() {

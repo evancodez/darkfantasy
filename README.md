@@ -11,17 +11,22 @@ model, sound and song is generated in code).
 npm start          # serves on http://localhost:5190
 ```
 
-Open it in Chrome and press Start. Click the game to capture the mouse.
+Open it in Chrome and press Start. Click the game to capture the mouse, or
+just pick up a controller (PS5 DualSense, PS4, Xbox — anything the browser
+reports as a standard gamepad).
 
-| Input | Action |
-|---|---|
-| WASD | move |
-| Mouse / Q E | camera |
-| Space | jump · press again in the air to somersault (double jump) |
-| Left click / J | sword — three clicks for a combo, the third is a spin |
-| Left click in the air | plunge attack (ground pound; breaks guards, stuns) |
-| Right click / Shift / K | shield — turns you toward the nearest threat; raise it just before a hit lands to **parry** |
-| Esc / P | pause |
+| Keyboard + mouse | PS5 controller | Action |
+|---|---|---|
+| WASD | left stick (analog) / d-pad | move — a light tilt walks |
+| Mouse / Q E · R | right stick · R1 or R3 | camera · snap behind Wick |
+| Space | ✕ | jump · press again in the air to somersault (double jump) |
+| Left click / J | □ | sword — three presses for a combo, the third is a spin. In the air: up to three aerial slashes that hang you in the air |
+| C / middle click / L | △ | heavy — a big spin on the ground; in the air, **smash down** (ground pound: breaks guards, stuns) |
+| Right click / Shift / K | L1 / L2 | shield — turns you toward the nearest threat; raise it just before a hit lands to **parry** |
+| Esc / P | OPTIONS | pause (menus: d-pad / stick to pick a chapter, ✕ to go, ○ back) |
+
+The controller rumbles on hits, parries and big impacts. Browsers only allow
+sound after a click or key press, so if you start with the pad, click once.
 
 Landing on small foes stomps them and refreshes your double jump.
 Parried orbs and fireballs fly back at whoever threw them.

@@ -82,3 +82,11 @@ img { image-rendering: pixelated; }
 @keyframes fadein { from { opacity: 0 } to { opacity: 1 } }
 
 @media (max-height: 640px) { .title .ctl { display: none; } .logo { font-size: clamp(48px, 10vw, 120px); } .chapters { margin-bottom: 1.5vh; } }
+
+/* ---------------------------------------------------------------- gamepad */
+body:not(.pad) .pad, body.pad .kbm { display: none !important; }
+.ps { display: inline-flex; align-items: center; justify-content: center; min-width: 1.3em; height: 1.3em; padding: 0 .1em; box-sizing: border-box; border-radius: 50%; vertical-align: -.2em;
+  font: 700 .85em/1 system-ui, -apple-system, sans-serif; font-style: normal; background: #120c2c; border: 2px solid currentColor; box-shadow: var(--px) var(--px) 0 #000; }
+.ps.x { color: #8fb8ff; } .ps.o { color: #ff7b8a; } .ps.s { color: #f3a0e0; } .ps.t { color: #56e0b0; }
+.ps.sh { border-radius: 5px; padding: 0 .35em; color: #e8e4ff; font-size: .72em; height: 1.55em; }
+.chapters button.focus { background: #2a1a70; color: #fff; border-color: #ffd040; outline: var(--px) solid #ffd040; outline-offset: 2px; }

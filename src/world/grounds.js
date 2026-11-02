@@ -393,12 +393,13 @@ export function populateOutside(game) {
   O.tick = (dt, g) => {
     const p = g.player.pos;
     const near = (q, r) => Math.hypot(p.x - q.x, p.z - q.z) < r;
-    if (near(V(-4, 0, -4), 10)) hint('sword', 'CLICK to swing your sword — click three times for a combo. Jump on small foes to stomp them!');
-    if (near(V(0, 0, -30), 14)) hint('parry', 'Hold RIGHT CLICK (or SHIFT) to raise your shield. Raise it right as an orb arrives to PARRY it back!', 7);
+    const b = g.btn;
+    if (near(V(-4, 0, -4), 10)) hint('sword', `${b('attack')} to swing your sword — three times for a combo, and it works in mid-air too. Jump on small foes to stomp them!`);
+    if (near(V(0, 0, -30), 14)) hint('parry', `Hold ${b('guard')} to raise your shield. Raise it right as an orb arrives to PARRY it back!`, 7);
     if (near(V(-38, 0, 2), 6)) hint('corn', 'The scarecrows guard a sigil in the heart of the corn.');
     if (near(V(39, 0, 1), 6)) hint('grave', 'A Moon Sigil glimmers atop the bell tower. Use the rune pad to begin the climb.');
     if (near(V(29, 0, 35), 6)) hint('witch', 'Something cackles inside the stone ring…');
-    if (near(tw, 9)) hint('plunge', 'Tip: in mid-air, CLICK to plunge your sword down.');
+    if (near(tw, 9)) hint('plunge', `Tip: in mid-air, ${b('smash')} smashes your sword straight down.`);
     // corn guardians wake when you enter the clearing; beat all three for the sigil
     if (!st.cornAwake && near(altar, CLEAR_R + 1)) { st.cornAwake = true; for (const e of guards) if (e.state === 'perched') { e.setState('wake'); e.vel.y = 6; e.gravity = 30; } game.hud.area('The Scarecrow Court'); }
     if (st.cornAwake && !st.cornSigil && guards.every(e => !e.alive)) { st.cornSigil = true; setTimeout(() => sigilAt('corn', altar.clone().setY(altar.y + 0.9)), 700); audio.play('secret'); }

@@ -10,7 +10,7 @@ import { buildOutside, populateOutside, SPAWN } from './world/outside.js';
 import { createFX } from './fx.js';
 import { Player } from './actors/player.js';
 import { Props } from './world/props.js';
-import { HUD } from './ui/hud.js';
+import { HUD, BTN } from './ui/hud.js';
 import { buildCastle } from './world/castle.js';
 import { setupDragon } from './actors/dragon.js';
 import { buildCarnival } from './world/carnival/carnival.js';
@@ -55,7 +55,7 @@ game.player = new Player(game, SPAWN);
 
 // ------------------------------------------------------------- game API used by actors/props
 game.hitstop = (t) => { game.hitstopT = Math.max(game.hitstopT, t); };
-game.shake = (s) => { game.player.cam.shake = Math.max(game.player.cam.shake, s); };
+game.shake = (s) => { game.player.cam.shake = Math.max(game.player.cam.shake, s); input.rumble(s * 1.2, s * 1.6, 70 + s * 260); };
 game.flash = (v = 0.6, color = 0xffffff) => { R.post.uFlash.value = Math.max(R.post.uFlash.value, v); R.post.uFlashCol.value.setHex(color); };
 game.hurtFlash = () => { R.post.uHurt.value = 1; };
 game.fadeFlash = () => { R.post.uFade.value = 1; };
@@ -71,6 +71,7 @@ game.onParry = (hit, player) => {
   game.fx.sparks(p, 18, 0xfff0a0, 7);
   game.fx.rings.add(p, { color: 0xffe080, r0: 0.2, r1: 2.2, life: 0.3, y: 0, quat: player.root.quaternion });
   hud.callout('PARRY!');
+  input.rumble(0.25, 1, 150);
   hit.source?.onParried?.(player);
 };
 
@@ -144,10 +145,18 @@ game.onFinalVictory = () => {
 
 // ------------------------------------------------------------- input / screens
 input.init(R.canvas);
+input.onDevice(d => hud.setDevice(d));
+// the button name for an action, for hints ("CLICK" or "□")
+game.btn = (a) => BTN[input.device === 'pad' ? 'pad' : 'kbm'][a];
+// browsers only let sound start after a click or key press (a pad button
+// doesn't count), so wake it on the first one
+const wake = () => { if (game.started) audio.init(); };
+addEventListener('pointerdown', wake); addEventListener('keydown', wake);
 let lastFrame = performance.now();
 function begin() {
   if (game.started) return;
   game.started = true;
+  input.consume('Space', 'Enter', 'PadCross');
   audio.init();
   hud.title(false);
   hud.show(true);
@@ -156,6 +165,7 @@ function begin() {
   game.player.teleport(SPAWN, Math.PI);
   audio.music('outside');
   audio.startLoop('wind', { volume: 0.5 });
+  if (navigator.userActivation && !navigator.userActivation.hasBeenActive) setTimeout(() => hud.hint('Click once (or press any key) to wake the sound.', 5), 300);
   // opening titles (skipped if you jump ahead with the chapter select)
   game.introTimers = [
     setTimeout(() => game.zone === 'outside' && hud.area('The Starway', 'Grimhold Grounds'), 600),
@@ -191,6 +201,21 @@ game.startAt = (ch) => {
 };
 hud.onChapter = (ch) => game.startAt(ch);
 hud.onResume = () => togglePause(false);
+// gamepad: OPTIONS pauses; on the title and pause screens the d-pad or left
+// stick walks a highlight over the chapters, Cross picks, Circle backs out
+function padMenus() {
+  if (game.started && !game.paused && !game.won && input.anyPressed('PadOptions')) { togglePause(true); return; }
+  const scr = !game.started ? (hud.ready && !hud.titleS.classList.contains('hidden') ? hud.titleS : null) : game.paused ? hud.pauseS : null;
+  if (!scr) return;
+  const dx = input.anyPressed('PadRight', 'NavRight') ? 1 : input.anyPressed('PadLeft', 'NavLeft') ? -1 : 0;
+  const dy = input.anyPressed('PadDown', 'NavDown') ? 1 : input.anyPressed('PadUp', 'NavUp') ? -1 : 0;
+  if ((dx || dy) && hud.menuMove(scr, dx, dy)) audio.play('select');
+  const f = hud.menuFocused(scr);
+  if (input.anyPressed('PadCross')) { if (f) { hud.menuFocus(scr, null); game.startAt(f.dataset.ch); } else if (!game.started) begin(); else togglePause(false); }
+  else if (input.anyPressed('PadOptions')) { if (!game.started) begin(); else togglePause(false); }
+  else if (input.anyPressed('PadCircle')) { if (f) hud.menuFocus(scr, null); else if (game.paused) togglePause(false); }
+  input.consume('PadCross', 'PadCircle', 'PadOptions');
+}
 function togglePause(force) {
   game.paused = force ?? !game.paused;
   hud.pause(game.paused);
@@ -203,6 +228,8 @@ const clock = new THREE.Clock();
 const titleCam = { t: 0 };
 function frame(dt) {
   const g = game;
+  input.poll(dt);
+  padMenus();
   if (g.paused) { input.mouse(); input.endFrame(); return; }
   g.time += dt;
   G.uTime.value = g.time;
